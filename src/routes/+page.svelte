@@ -590,7 +590,7 @@
     open: string | (() => void),
     fresh = false,
 )}
-    <div class="cluster">
+    <div class="cluster title-line">
         <span class="tag {badge}" data-testid={testid}>{state}</span>
         {#if typeof open === 'string'}
             <!-- 行いっぱいが的なので、先読みは押したときだけ (一覧を撫でるだけで何本も読みに行かない) -->
@@ -666,7 +666,7 @@
         {:else}
             ルール:
             {#if ruleId !== null}
-                <a href={resolve(`rules?edit=${ruleId}`)}>{ruleName}</a>
+                <a href={resolve(`rules?edit=${ruleId}`)} title={ruleName ?? undefined}>{ruleName}</a>
             {:else}
                 (削除済み)
             {/if}
@@ -1786,6 +1786,28 @@
     }
     .row-sub {
         margin-top: 0.125rem;
+    }
+    /*
+     * **番組名・局と日時・ルール名は1行ずつで切る。** 折り返すと題名の長さで行の高さが
+     * 変わり、並んだ「詳細」「削除」の位置が行ごとにずれて押しにくかった。はみ出す分は
+     * 「…」で省く。全部は詳細 (番組名・局) と、押した先のルールの編集・title (ルール名) で読める。
+     * 押せる範囲 (`.row-open::after`) は `.row` を基準に置いているので、ここで切っても欠けない
+     */
+    .title-line {
+        flex-wrap: nowrap;
+        min-width: 0;
+    }
+    .title-line > .tag {
+        flex-shrink: 0;
+    }
+    .title-line .row-name,
+    div.row-meta,
+    .row-sub[data-testid='rule-name'] {
+        display: block;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .row-empty {
         padding: 0.75rem;
