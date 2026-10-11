@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { DRCS_REPLACE } from './b24-tables';
 import { B24CaptionDecoder } from './b24caption';
+import { decodeGrey } from './drcs-smooth';
 import { drcsUnit, encodeAribText, management, statement, text, unit } from './synth-caption';
 
 /** CSI の並び。`csi('170;30', 0x5f)` は SDP */
@@ -121,7 +123,7 @@ describe('B24CaptionDecoder', () => {
         ]);
     });
 
-    test('置き換えられない外字は絵のまま送る (1画素1ビット)', () => {
+    test('置き換えられない外字は絵で送る (なめらかにした濃淡。drcs-smooth.ts)', () => {
         const rows = [
             '#.......',
             '.#......',
@@ -141,13 +143,17 @@ describe('B24CaptionDecoder', () => {
         expect(page?.runs).toHaveLength(1);
         const run = page?.runs[0];
         expect(run).toMatchObject({ text: '〓', drcs: String((1 << 16) | 0x21) });
-        expect(page?.drcs?.[run?.drcs ?? '']).toEqual({
-            w: 8,
-            h: 8,
-            depth: 2,
-            bits: 1,
-            data: Buffer.from([0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01]).toString('base64'),
-        });
+        const drcs = page?.drcs?.[run?.drcs ?? ''];
+        expect(drcs).toMatchObject({ w: 64, h: 64, depth: 16, bits: 4 });
+        // 元の絵の MD5 も添える (置き換え表に足すときに使う)
+        const raw = Uint8Array.from([0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01]);
+        expect(drcs?.md5).toBe(createHash('md5').update(raw).digest('hex'));
+        // 8 倍にした斜めの線: 線の上は濃く、離れたところは空く
+        const g = decodeGrey(64, 64, 16, 4, Uint8Array.from(Buffer.from(drcs?.data ?? '', 'base64')));
+        for (const i of [4, 20, 36, 52]) {
+            expect(g.pixels[i * 64 + i]).toBe(255);
+            expect(g.pixels[i * 64 + ((i + 32) % 64)]).toBe(0);
+        }
     });
 
     test('外字の置き換え表には denpa で足した分も入っている', () => {
