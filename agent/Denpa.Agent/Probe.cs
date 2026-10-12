@@ -33,6 +33,23 @@ public static class Probe
     private static readonly TimeSpan Read = TimeSpan.FromSeconds(3);
 
     /// <summary>
+    /// 鍵を貰いに行く接続の TTL (<c>CARD_TTL</c>。常駐のときと同じ)。設定が読めなければ、
+    /// 常駐のときと同じく理由を出して止まる (null)
+    /// </summary>
+    private static int? CardHops()
+    {
+        try
+        {
+            return CardLanPolicy.FromEnvironment().Hops;
+        }
+        catch (ArgumentException error)
+        {
+            Console.Error.WriteLine(error.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// ファイルを1つ復号する。**チューナーを使わずに B25 だけ確かめる。**
     ///
     /// <para>
@@ -50,7 +67,8 @@ public static class Probe
             return 2;
         }
 
-        Keys.Configure(Environment.GetEnvironmentVariable("CARD_URL"));
+        if (CardHops() is not { } hops) return 2;
+        Keys.Configure(Environment.GetEnvironmentVariable("CARD_URL"), hops);
         var b25 = new Descrambler(Keys.Source);
         using var input = File.OpenRead(source);
         using var output = File.Create(destination);
@@ -110,7 +128,9 @@ public static class Probe
         var decode = args.Contains("--decode");
         // 手元にカードが無い拠点。鍵だけ貰いに行く (CardShare.cs)
         var cardAt = Array.IndexOf(args, "--card-url");
-        Keys.Configure(cardAt >= 0 ? args.ElementAtOrDefault(cardAt + 1) : null);
+        // 貰いに行く接続の TTL は常駐のときと同じ CARD_TTL (既定 1。CardLan.cs)
+        if (CardHops() is not { } hops) return 2;
+        Keys.Configure(cardAt >= 0 ? args.ElementAtOrDefault(cardAt + 1) : null, hops);
 
         var known = Config.FromEnvironment().StreamIds();
 
