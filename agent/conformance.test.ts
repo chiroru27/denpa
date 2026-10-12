@@ -655,6 +655,7 @@ describe('機材の定義', () => {
                     use: use(step.open),
                     priority: String(step.priority),
                 });
+                for (const name of step.after ?? []) query.append('after', use(name));
                 const opened = await open(query.toString());
                 if (step.rank === null) {
                     expect(opened.status).toBe(409);
@@ -668,6 +669,19 @@ describe('機材の定義', () => {
                     step.open,
                     step.rank,
                 ]);
+                // 引き継いだ相手は、蹴られたのではなく正常に終わっている (読み手が切るまで終わらない約束の例外)
+                for (const name of step.ended ?? []) {
+                    const reader = streams.get(name)?.reader;
+                    expect(reader).toBeDefined();
+                    expect((await drain(reader as ReadableStreamDefaultReader)).error).toBeNull();
+                    await gone(name);
+                }
+                // 選ばれなかった本の読み手には触らない。まだ読めている
+                for (const name of step.kept ?? []) {
+                    expect((await tuners()).some((t) => t.users.some((u) => u.use === use(name)))).toBe(true);
+                    const read = await streams.get(name)?.reader?.read();
+                    expect(read?.done).toBe(false);
+                }
             }
             // 次の場面へ持ち越さない。同じ名前の本は定義を書き換えても選局が残る
             for (const [name, stream] of streams) {
