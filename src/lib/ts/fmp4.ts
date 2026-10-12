@@ -99,11 +99,11 @@ export class Fmp4Splitter {
 
 /*
  * ---------------------------------------------------------------------------
- * 中身を読む (画面の canvas で描く道。`raw/fmp4.ts`)。
+ * 中身を読む (画面の canvas で描く経路。`raw/fmp4.ts`)。
  *
  * MSE に渡すときは割るだけで済んだが、**自分でデコードするときは中身が要る** — moov から
  * 何の映像・音声か (avcC / av1C / esds / dOps) を、moof から1コマずつの時刻と在りかを
- * (tfdt / trun) 読む。読むのは denpa の ffmpeg が出す形 (`server/live.ts` の
+ * (tfdt / trun) 読む。読むのは denpa の ffmpeg が出す形式 (`server/live.ts` の
  * `+empty_moov+default_base_moof`) に要るものだけ:
  *
  * - 中身の在りかは moof の頭から数える (`default-base-is-moof`)。tfhd の
@@ -127,7 +127,7 @@ export interface Fmp4Track {
     config: Uint8Array<ArrayBuffer>;
     width: number;
     height: number;
-    /** 音声の本数と標本化周波数 (sample entry に書いてある値) */
+    /** 音声のチャンネル数と標本化周波数 (sample entry に書いてある値) */
     channels: number;
     sampleRate: number;
     /** trex に書いてある既定 (trun・tfhd に無いとき) */
@@ -253,7 +253,7 @@ function readEntry(
         return { ...base, ...size, kind: 'video', codec: av1Codec(av1C), config: av1C.slice() };
     }
     if (entry.type === 'mp4a' || entry.type === 'Opus') {
-        // AudioSampleEntry: 本数は 16、標本化周波数は 24 (16.16 の上半分)、中身の箱は 28 から
+        // AudioSampleEntry: チャンネル数は 16、標本化周波数は 24 (16.16 の上半分)、中身の箱は 28 から
         if (body.length < 28) return null;
         const sound = { channels: v.getUint16(16), sampleRate: v.getUint32(24) >>> 16 };
         const inner = body.subarray(28);
@@ -434,7 +434,7 @@ const ADTS_RATES = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 1600
 /**
  * **MP4 の AAC の1コマに付ける ADTS の頭。** デコーダ (`wasm/mpeg2` の `aac_push`) は
  * 放送の ADTS を食う作りなので、MP4 の1コマ (頭無し) はそのままでは渡せない。
- * 頭の中身は AudioSpecificConfig (esds) から起こす: 種類 (LC なら 2)・標本化周波数の番号・本数。
+ * 頭の中身は AudioSpecificConfig (esds) から起こす: 種類 (LC なら 2)・標本化周波数の番号・チャンネル数。
  *
  * 頭は 7 バイト (CRC 無し)。ADTS に書ける種類は 1〜4 (Main / LC / SSR / LTP) だけで、
  * それ以外 (HE-AAC など) と、標本化周波数を値で書いたもの (番号 15) は null
@@ -461,7 +461,7 @@ export function adtsHeader(config: Uint8Array, payload: number): Uint8Array | nu
 }
 
 /**
- * dOps (MP4 の Opus の設定) を、FFmpeg の Opus デコーダが受け取る OpusHead (Ogg の形) に
+ * dOps (MP4 の Opus の設定) を、FFmpeg の Opus デコーダが受け取る OpusHead (Ogg の形式) に
  * 書き換える。並びは同じで、**数の並べ方だけが違う** (dOps は大きい桁が先、OpusHead は
  * 小さい桁が先)。頭に `OpusHead`、版は 1。並べ方が読めなければ null
  */
@@ -474,7 +474,7 @@ export function opusHead(dOps: Uint8Array): Uint8Array | null {
     const o = new DataView(out.buffer);
     out.set([0x4f, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64]); // OpusHead
     out[8] = 1;
-    out[9] = dOps[1]!; // 出す本数
+    out[9] = dOps[1]!; // 出すチャンネル数
     o.setUint16(10, v.getUint16(2), true); // 頭で捨てる標本数
     o.setUint32(12, v.getUint32(4), true); // 元の標本化周波数
     o.setInt16(16, v.getInt16(8), true); // 音量の補正
