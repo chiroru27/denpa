@@ -1,6 +1,6 @@
 import { rmSync, writeFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
-import { expect, goto, syncEpg, test, wakeControls } from './helpers';
+import { expect, goto, reserveSoon, syncEpg, test, wakeControls } from './helpers';
 
 /**
  * **互換モード** — ライブの H.264 / AV1 も canvas に描く (`src/lib/canvas-video.ts`・`src/lib/raw/fmp4.ts`)。
@@ -28,7 +28,7 @@ async function watchAv1(page: Page): Promise<void> {
 }
 
 /** canvas に描いて、音も鳴らしていること (数が進む・絵が変わる) */
-async function expectDrawn(page: Page): Promise<void> {
+async function expectDrawn(page: Page, prefix = 'live'): Promise<void> {
     const canvas = page.locator('[data-testid="live-raw"][data-input="fmp4"]');
     await expect(canvas).toBeVisible({ timeout: 30_000 });
     const count = async (name: 'shown' | 'audio') => Number((await canvas.getAttribute(`data-${name}`)) ?? 0);
@@ -43,7 +43,7 @@ async function expectDrawn(page: Page): Promise<void> {
         expect((await canvas.screenshot()).equals(one)).toBe(false);
     }).toPass({ timeout: 10_000 });
     // **`<video>` では再生していない** (MSE を繋いでいない)
-    const video = page.getByTestId('live-video');
+    const video = page.getByTestId(`${prefix}-video`);
     expect(await video.evaluate((v) => (v as HTMLVideoElement).currentSrc)).toBe('');
 }
 
@@ -172,5 +172,87 @@ test.describe('互換モード', () => {
                 .toMatch(/^blob:/);
             await expect(page.getByTestId('live-raw')).toHaveCount(0);
         });
+    });
+});
+
+test.describe('互換モードの追っかけ', () => {
+    test.beforeEach(async ({ request, stack }) => {
+        await syncEpg(request);
+        writeFileSync(stack.liveFmp4File, '');
+    });
+    test.afterEach(async ({ stack }) => {
+        rmSync(stack.liveFmp4File, { force: true });
+        rmSync(stack.failFile, { force: true });
+    });
+
+    test('追っかけも canvas に描き、速さは出さず、止めた所から再開する', async ({ page, request, stack }) => {
+        test.setTimeout(180_000);
+        /*
+         * **焼かせない。** BS の番組は 5 秒で録り終わり、焼けると元の TS が無くなって頼み直しが断られる
+         * (25-chase と同じく、偽 ffmpeg の焼きを失敗させて「焼けていない」録画にしておく)
+         */
+        writeFileSync(stack.failFile, '1');
+        // 入れてあり、注意も見せたことにしておく (出し方はライブのテストが見る)
+        await page.addInitScript(() => {
+            localStorage.setItem('canvas-video', 'on');
+            localStorage.setItem('canvas-drive-notice', '1');
+        });
+        await reserveSoon(page, request, 'BS');
+        let id = 0;
+        await expect(async () => {
+            type Item = { id: number; recording: boolean };
+            const list = (await (await request.get('/api/recordings')).json()) as Item[];
+            id = list.find((rec) => rec.recording)?.id ?? 0;
+            expect(id).toBeGreaterThan(0);
+        }).toPass({ timeout: 120_000, intervals: [500] });
+
+        await goto(page, `/chase/${id}`);
+        await expect(page.getByTestId('chase-title')).toBeVisible();
+        await wakeControls(page, 'chase');
+        await page.getByTestId('chase-codec').click();
+        await page.locator('[data-testid="chase-codec-option"][data-codec="av1"]').click();
+        await expectDrawn(page, 'chase');
+
+        // 速さは等速だけ (切り替えを出さない)
+        await wakeControls(page, 'chase');
+        await expect(page.getByTestId('chase-speed')).toHaveCount(0);
+
+        // 止めても絵は止めた所のまま。再開すると続きから描く (頼み直さない — 器はそのまま数え続ける)
+        const canvas = page.locator('[data-testid="live-raw"][data-input="fmp4"]');
+        const shown = async () => Number((await canvas.getAttribute('data-shown')) ?? 0);
+        const play = page.getByTestId('chase-play');
+        await play.click();
+        await expect(play).toHaveAttribute('aria-label', '再生');
+        const paused = await shown();
+        await page.waitForTimeout(1_500);
+        expect(await shown()).toBeLessThanOrEqual(paused + 2);
+        await wakeControls(page, 'chase');
+        await play.click();
+        await expect(play).toHaveAttribute('aria-label', '一時停止');
+        await expect.poll(shown, { timeout: 15_000 }).toBeGreaterThan(paused + 10);
+
+        /*
+         * **頼み直したあとも居場所が飛ばない。** 帯を動かすと (溢れの読み直しと同じく) 居る場所から
+         * 頼み直す。新しい流れの時刻は 0 から数え直しになるので、居場所はサーバが返す頭 (`timeline`) +
+         * 新しい流れの中の秒になる。前の流れの秒を足したまま先へ飛んでいないことを見る
+         */
+        // 居場所は読みものの「m:ss / m:ss」の左 (帯の値は録れている長さで頭打ちになるので使わない)
+        const status = page.getByTestId('chase-controls').getByText(/^\d+:\d\d \/ \d+:\d\d$/);
+        const where = async () => {
+            const text = (await status.textContent()) ?? '';
+            const [m = 0, s = 0] = text.split(' / ')[0]!.split(':').map(Number);
+            return m * 60 + s;
+        };
+        await expect.poll(where, { timeout: 30_000 }).toBeGreaterThanOrEqual(8);
+        const before = await where();
+        // 帯を動かすのと同じ (`seekBy`)。頭へ戻す。押したボタンに居ると矢印は効かない (`keys.ts`) ので外す
+        await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+        await page.keyboard.press('ArrowLeft');
+        // 頼んだ所へ戻り、そこから進む。3秒後も、前の居場所より手前に居る (前の流れの秒を足していない)
+        await expect.poll(shown, { timeout: 15_000 }).toBeGreaterThan((await shown()) + 30);
+        await page.waitForTimeout(3_000);
+        const after = await where();
+        expect(after).toBeLessThan(before);
+        await expect.poll(where, { timeout: 15_000 }).toBeGreaterThan(after);
     });
 });
