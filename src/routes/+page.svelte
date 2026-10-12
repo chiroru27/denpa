@@ -20,7 +20,7 @@
     import ServiceLogo from '#lib/components/ServiceLogo.svelte';
     import Toasts, { errorNotice, type Notice } from '#lib/components/Toasts.svelte';
     import { type DetailSeed, programDetail } from '#lib/detail.svelte.js';
-    import { mintShareLink, startDownload } from '#lib/download.js';
+    import { startDownload } from '#lib/download.js';
     import { applyEncodeProgress, encodeLive } from '#lib/encode-live.svelte.js';
     import {
         badgeClass,
@@ -66,13 +66,18 @@
 
     const active = ['scheduled', 'conflict', 'recording'];
 
-    /*
-     * ダウンロードは押されてから期限付きの署名URLを作って始める (`#lib/download.js`)。
-     * 資格情報を URL に埋めていた頃は、パスワードがダウンロード履歴に残り続けた
+    /**
+     * ダウンロードはファイルのエンドポイントへ遷移して始める (`#lib/download.js`)。押したら詳細は畳む。
+     * 断られたら (ログインが切れた・録画が消えた) 遷移せずに知らせる
      */
     function download(id: number, source?: FileSource): void {
         void startDownload(id, source).then((ok) => {
-            if (!ok) noteAction('error', 'ダウンロードのリンクを作れませんでした');
+            if (ok) return;
+            downloadNote = {
+                key: `download-${Date.now()}`,
+                kind: 'error',
+                text: 'ダウンロードを始められませんでした。ページを読み直してから試してください',
+            };
         });
         detail.close();
     }
@@ -114,41 +119,16 @@
     /** 端末への保存の結果。フォームではないので自前で持つ */
     let offlineNote = $state<Notice | null>(null);
 
-    /** リンクコピー・ダウンロードの結果。こちらもフォームではないので自前で持つ */
-    let actionNote = $state<Notice | null>(null);
-
-    function noteAction(kind: 'info' | 'error', text: string): void {
-        actionNote = { key: `action-${Date.now()}`, kind, text };
-    }
+    /** ダウンロードを始められなかったこと。こちらもフォームではないので自前で持つ */
+    let downloadNote = $state<Notice | null>(null);
 
     /**
      * 閉じた (自分で消えた) 通知は持ち主が捨てる。Toasts は返事 (`form`) が変わると
      * 閉じたことを忘れるので、持ったままだと別のボタンを押すたびに蘇る
      */
     function dropNote(key: string): void {
-        if (actionNote?.key === key) actionNote = null;
         if (offlineNote?.key === key) offlineNote = null;
-    }
-
-    /**
-     * 期限付きの再生リンクを作ってクリップボードへ (`share.ts`)。
-     * ログインできない端末でファイルを開くためのもの。パスワードは入っていない
-     */
-    async function copyShareLink(id: number): Promise<void> {
-        const link = await mintShareLink(id);
-        if (link === null) {
-            noteAction('error', '再生リンクを作れませんでした');
-            return;
-        }
-        try {
-            await navigator.clipboard.writeText(link.url);
-            // 有効な長さはサーバの決めごと (share.ts の SHARE_TTL)。文字で固定しない
-            const hours = Math.round((link.expiresAt - Date.now()) / 3_600_000);
-            noteAction('info', `再生リンクをコピーしました (${hours}時間有効)`);
-        } catch {
-            // 貼れない繋ぎ (http) ではクリップボードが使えない (切り抜きと同じ制約)
-            noteAction('error', 'コピーできませんでした。https で開いているか確かめてください');
-        }
+        if (downloadNote?.key === key) downloadNote = null;
     }
 
     /** 裏で失敗した保存 (Background Fetch)。黙って消えると「無かったことになった」ように見える */
@@ -166,7 +146,7 @@
     const notices = $derived.by(() => {
         const list: Notice[] = [];
         if (offlineNote !== null) list.push(offlineNote);
-        if (actionNote !== null) list.push(actionNote);
+        if (downloadNote !== null) list.push(downloadNote);
         list.push(...errorNotice(form, 'dashboard-error'));
         if (form?.reconcile) {
             /*
@@ -1528,17 +1508,6 @@
                                         ダウンロード (元のTS)
                                     </DropdownMenu.Item>
                                 {/if}
-                                <!--
-                                    **ログインせずに開ける再生リンク** (share.ts)。期限付き
-                                    (SHARE_TTL) なので、他人の機器の履歴に残っても腐るだけ。
-                                    押したらメニューは閉じる — 開いたままだと押せたのか分からない
-                                -->
-                                <DropdownMenu.Item
-                                    onSelect={() => void copyShareLink(rec.id)}
-                                    data-testid="share-link-button"
-                                >
-                                    再生リンクをコピー
-                                </DropdownMenu.Item>
                                 <!--
                                     **未視聴の印を付け外しする** (`?/watched`)。末尾まで観れば勝手に外れる
                                     ので、押すのは観直したいときか、よそで観たときくらい。どちらも続きの位置は消す
