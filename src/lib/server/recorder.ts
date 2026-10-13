@@ -20,6 +20,12 @@ import { parseTitle } from './title';
 import { openChannelStream, recordingUse, type StreamUse } from './tuner';
 import { notify } from './webhook';
 
+/**
+ * 録り始めてから PMT でコピー禁止と分かり、1バイトも保存しなかった録画の理由
+ * (番組表が古い・無かったとき。ふだんは予約の時点で止まる: `format.COPY_NEVER_REASON`)
+ */
+export const COPY_NEVER_RECORDING = 'コピー禁止の番組なので録画しませんでした';
+
 /** 録画中のストリームを止めるための手段。プロセス内にしか無いので再起動で失われる (起動時に拾い直す: recoverOrphanedRecordings) */
 const active = new Map<number, AbortController>();
 
@@ -268,6 +274,17 @@ async function pump(
     const eventId = recording.program_id === null ? null : recording.program_id % 100000;
 
     let written = 0;
+    /** いまコピー禁止で保存を止めているか (変わり目でだけ言う) */
+    let copyNever = false;
+    /**
+     * 番組が始まってから書いたか。開始マージンのぶん (前の番組) は数えない — そこを書いていても、
+     * 番組が始まった時点で禁止なら録画をやめる。再起動をまたいで続きから録るときは、
+     * 番組の途中までもう書いてあるものとして扱う (`recoverOrphanedRecordings`)
+     */
+    let wroteProgram =
+        Date.now() > recording.start_at && (statSync(path, { throwIfNoEntry: false })?.size ?? 0) > 0;
+    /** 始めから禁止だったので録画をやめたか。前の番組のぶんを書いていても失敗にする */
+    let stoppedForCopyNever = false;
     // 何を使っているのかがチューナー画面に出る。番組名は載せず、IDだけ渡して向こうで引く
     const use = recordingUse(recording.id);
 
@@ -340,7 +357,40 @@ async function pump(
                         }
 
                         const out = filter.filter(chunk);
+                        /*
+                         * **コピー禁止のあいだは保存しない** (PMT のデジタルコピー制御記述子)。番組表が
+                         * 古い・無いときの備えで、ふだんは予約の時点で止まっている (`format.COPY_NEVER_REASON`)。
+                         * 決めるのは PMT を読んでから — それまでのぶん (PAT・番組表) も書かない
+                         */
+                        if (!filter.ready) continue;
+                        if (filter.copyNever) {
+                            if (!copyNever) {
+                                copyNever = true;
+                                console.warn(
+                                    `[recorder] 録画 ${recording.id}: コピー禁止なので保存を止めます`,
+                                );
+                            }
+                            /*
+                             * **番組が始まった時点で禁止なら録画をやめてチューナーを返す。** 番組が始まる前
+                             * (開始マージン) の PMT は前の番組のものなので、番組が始まるまでは待つ
+                             * (そのあいだに前の番組のぶんを書いていても、本編を1バイトも書いていなければやめる)。
+                             * 本編を書いたあとで禁止に変わったときは止めない — そこまでのぶんは残し、戻れば続きを書く
+                             */
+                            if (!wroteProgram && Date.now() >= recording.start_at) {
+                                stoppedForCopyNever = true;
+                                controller.abort();
+                                break;
+                            }
+                            continue;
+                        }
+                        if (copyNever) {
+                            copyNever = false;
+                            console.warn(
+                                `[recorder] 録画 ${recording.id}: コピー禁止が解けたので保存を続けます`,
+                            );
+                        }
                         if (out.length === 0) continue;
+                        if (!wroteProgram && Date.now() >= recording.start_at) wroteProgram = true;
                         written += out.byteLength;
                         if (!sink.write(out)) await once(sink, 'drain');
                     }
@@ -377,6 +427,15 @@ async function pump(
         }
     } finally {
         active.delete(recording.id);
+    }
+
+    /*
+     * 始めから禁止だったものは失敗にする。開始マージンで前の番組のぶんを書いていても、
+     * それだけを「録れた」にしない (元のTSは失敗した録画と同じく残す)
+     */
+    if (stoppedForCopyNever) {
+        fail(recording.id, COPY_NEVER_RECORDING);
+        return;
     }
 
     let size = written;

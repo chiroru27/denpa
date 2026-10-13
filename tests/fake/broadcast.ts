@@ -15,6 +15,7 @@ import { CLOCK } from '../../src/lib/ts/pes';
 import {
     aitSection,
     aitSignallingDescriptor,
+    copyControlDescriptor,
     ddbSection,
     diiSection,
     eitSection,
@@ -95,9 +96,32 @@ export interface Knobs {
     extendedMs: number;
     /** EIT[p/f] を流さない。延長に追従できない局の見え方を確かめる */
     noPresentFollowing: boolean;
+    /**
+     * **番組表 (EIT) でコピー禁止と言う局** (service_id)。その局の全番組に、コピー禁止の
+     * デジタルコピー制御記述子を載せる。予約の時点で「録画しない」になるのを確かめる。
+     * 局を絞るのは、同じワーカーのほかの試験が使う局 (MX・BS) を巻き込まないため
+     */
+    eitCopyNever: number[];
+    /**
+     * **PMT でコピー禁止と言う。** 番組表は言わないまま、流れているものだけが禁止になる
+     * (番組表が古い・無いときの備えを確かめる。録り始めてから保存を止める)
+     */
+    pmtCopyNever: boolean;
 }
 
-export const DEFAULT_KNOBS: Knobs = { scrambled: false, extendedMs: 0, noPresentFollowing: false };
+export const DEFAULT_KNOBS: Knobs = {
+    scrambled: false,
+    extendedMs: 0,
+    noPresentFollowing: false,
+    eitCopyNever: [],
+    pmtCopyNever: false,
+};
+
+/** その局の番組。つまみ (`eitCopyNever`) に入っている局なら、コピー禁止の印を付ける */
+const programsWith = (service: FakeService, knobs: Knobs): SynthEvent[] =>
+    knobs.eitCopyNever.includes(service.serviceId)
+        ? programsFor(service).map((event) => ({ ...event, copyControl: 0b11 }))
+        : programsFor(service);
 
 /** 1枠の本数。E2E では短くして「数秒後に始まる番組」を作る */
 const SLOTS = Number(process.env['FAKE_SLOTS'] ?? 60);
@@ -382,7 +406,7 @@ function logoPackets(service: FakeService): Uint8Array {
  * スキャンの結果を作り物で返していたので要らなかったが、本物のエージェントに
  * 食わせるならこれが無いとどのチャンネルも見つからない。
  */
-function tables(services: FakeService[]): Uint8Array {
+function tables(services: FakeService[], knobs: Knobs): Uint8Array {
     /*
      * ロゴを積んでいる中継にはエンジニアリングサービス (929) がある。
      * **PAT に載せるかどうかがそのまま「当たり外れ」になる** — denpa は
@@ -398,19 +422,18 @@ function tables(services: FakeService[]): Uint8Array {
     }
     for (const [index, service] of services.entries()) {
         const pids = pidsOf(index);
-        parts.push(
-            ...packetize(
-                pids.pmt,
-                programMap(service.serviceId, pids.video, [
-                    [0x02, pids.video],
-                    [0x0f, pids.audio],
-                    // **印が付いた ES があって初めて AIT を読みに行く** (`ts/ait.ts`)
-                    ...(service.hybridcast === undefined
-                        ? []
-                        : ([[0x0d, pids.ait, aitSignallingDescriptor()]] as [number, number, number[]][])),
-                ]),
-            ),
-        );
+        const streams: ([number, number] | [number, number, number[]])[] = [
+            [0x02, pids.video],
+            [0x0f, pids.audio],
+            // **印が付いた ES があって初めて AIT を読みに行く** (`ts/ait.ts`)
+            ...(service.hybridcast === undefined
+                ? []
+                : ([[0x0d, pids.ait, aitSignallingDescriptor()]] as [number, number, number[]][])),
+        ];
+        // コピー禁止は番組ぜんたいの記述子に載せる (本物もここ)
+        const programInfo = knobs.pmtCopyNever ? copyControlDescriptor(0b11) : [];
+        const pmt = programMap(service.serviceId, pids.video, streams, undefined, programInfo);
+        parts.push(...packetize(pids.pmt, pmt));
         if (service.hybridcast !== undefined) {
             parts.push(
                 ...packetize(
@@ -458,10 +481,11 @@ function tables(services: FakeService[]): Uint8Array {
  * どの中継にもネットワーク全局ぶんの番組表 (基本) が流れていて、denpa の全局読み
  * (`epg-collect.firstSweeps` / `networkSweeps`) はどの中継を開いてもそれで埋まる前提でいる
  */
-function schedule(services: FakeService[]): Uint8Array {
+function schedule(services: FakeService[], knobs: Knobs): Uint8Array {
     const parts: number[] = [];
     const push = (service: FakeService, tableId: number) => {
-        for (const section of scheduleSections(service, programsFor(service), tableId)) {
+        const events = programsWith(service, knobs);
+        for (const section of scheduleSections(service, events, tableId)) {
             parts.push(...packetize(0x0012, section));
         }
     };
@@ -485,7 +509,7 @@ function nowOnAir(services: FakeService[], knobs: Knobs): Uint8Array {
     if (knobs.noPresentFollowing) return new Uint8Array(0);
     const parts: number[] = [];
     for (const service of services) {
-        const events = programsFor(service);
+        const events = programsWith(service, knobs);
         const current = present(events);
         if (current === undefined) continue;
         const section = (sectionNumber: number, event: SynthEvent) =>
@@ -595,8 +619,8 @@ export function broadcast(
     ]);
 
     // 選局した直後に表と番組表を流す。本物も数百 ms で PAT が来る
-    send(tables(services));
-    send(schedule(services));
+    send(tables(services, knobs()));
+    send(schedule(services, knobs()));
     send(nowOnAir(services, knobs()));
 
     let ticks = 0;
@@ -615,7 +639,7 @@ export function broadcast(
         if (ticks % 5 === 0) send(logo);
         // 表と p/f は繰り返し流れてくる。途中から読んでも辻褄が合うように
         if (ticks % 10 === 0) {
-            send(tables(services));
+            send(tables(services, now));
             send(nowOnAir(services, now));
         }
         /*
