@@ -255,21 +255,63 @@ test.describe('ダッシュボードと画面遷移', () => {
         await expect(menu).toBeVisible();
         /*
          * **下の行が透けて見えない** (#481)。iOS の Safari では包みの z-index が
-         * `auto` のまま残り、後に続く録画の行が上に重なっていた (`app.css`)。
-         * 塗りが不透明であることと、包みが前に出ていることを見る
+         * `auto` のまま残り、後に続く録画の行が上に重なっていた。いまは popover で
+         * 最前面 (top layer) に出す。塗りが不透明であることと、真ん中を指したとき
+         * メニュー自身が当たる (ほかのものが上に重なっていない) ことを見る
          */
         const layer = await menu.evaluate((el) => {
-            const wrapper = el.closest('[data-bits-floating-content-wrapper]');
+            const box = el.getBoundingClientRect();
+            const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
             return {
                 background: getComputedStyle(el).backgroundColor,
-                wrapperZ: wrapper === null ? '' : getComputedStyle(wrapper).zIndex,
+                top: el.matches(':popover-open'),
+                front: hit !== null && el.contains(hit),
             };
         });
         expect(layer.background).toMatch(/^rgb\(/);
-        expect(layer.wrapperZ).toBe('50');
+        expect(layer.top).toBe(true);
+        expect(layer.front).toBe(true);
         await menu.getByTestId('reconcile-menu-button').click();
         await expect(page.getByTestId('reconcile-result')).toBeVisible();
         // 送り終えたら閉じる
+        await expect(menu).toBeHidden();
+    });
+
+    /*
+     * **メニューはキーボードでも使える** (`Menu.svelte`)。Enter で開くと先頭の項目に入り、
+     * ↑↓・Home・End で動き、Esc で閉じて引き金に戻る
+     */
+    test('「⋯」はキーボードで開け閉めできる', async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await goto(page, '/');
+        const more = page.getByTestId('recordings-more');
+        const menu = page.getByTestId('recordings-more-menu');
+        await expect(more).toHaveAttribute('aria-expanded', 'false');
+
+        await more.focus();
+        await page.keyboard.press('Enter');
+        await expect(menu).toBeVisible();
+        await expect(more).toHaveAttribute('aria-expanded', 'true');
+        const items = menu.getByRole('menuitem');
+        await expect(items.first()).toBeFocused();
+        await page.keyboard.press('ArrowDown');
+        await expect(items.nth(1)).toBeFocused();
+        await page.keyboard.press('Home');
+        await expect(items.first()).toBeFocused();
+        await page.keyboard.press('End');
+        await expect(items.last()).toBeFocused();
+
+        await page.keyboard.press('Escape');
+        await expect(menu).toBeHidden();
+        await expect(more).toBeFocused();
+        await expect(more).toHaveAttribute('aria-expanded', 'false');
+
+        // ↑ で開くと末尾から
+        await page.keyboard.press('ArrowUp');
+        await expect(menu).toBeVisible();
+        await expect(items.last()).toBeFocused();
+        // 外を押せば閉じる
+        await page.locator('.recordings h2').click();
         await expect(menu).toBeHidden();
     });
 
