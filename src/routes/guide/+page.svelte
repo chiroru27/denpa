@@ -5,6 +5,7 @@
     import Icon from '#lib/components/player/Icon.svelte';
     import ServiceLogo from '#lib/components/ServiceLogo.svelte';
     import { channelNumber, date, SERVICE_TYPE_LABEL, stateLabel, time } from '#lib/format.js';
+    import { morph } from '#lib/motion.svelte.js';
     import { reload } from '#lib/reload.svelte.js';
     import { cellsOf, columnsOf, mainOf, SUBCHANNELS_COOKIE, splitOf } from '#lib/subchannels.js';
     import type { ProgramDetail as Facts } from '#lib/types.js';
@@ -165,7 +166,7 @@
      * 無く、一拍おいて生える見え方になる。取りに行くのは同じホストの 1 件で
      * 数十 ms なので、揃ってから出す。取れなければ (番組表から消えた) 表の分だけ
      */
-    async function open(program: Sheet['programs'][number]): Promise<void> {
+    async function open(program: Sheet['programs'][number], from: HTMLElement | null = null): Promise<void> {
         const token = ++opening;
         const seed: Facts = {
             name: program.name,
@@ -189,15 +190,32 @@
             // 取れなくても開く。中身は表が持っている分だけ
         }
         if (token !== opening) return;
-        facts = detail;
-        selected = program;
+        // 開いているところへ別の番組を出すとき (検索の結果から) は広げない。箱はもう出ている
+        const fresh = selected === null;
+        origin = from;
+        morph(fresh ? from : null, DETAIL_NAME, 'open', () => {
+            facts = detail;
+            selected = program;
+        });
     }
 
     function close(): void {
         opening++;
-        selected = null;
-        facts = null;
+        const back = origin;
+        origin = null;
+        if (selected === null) return;
+        morph(back, DETAIL_NAME, 'close', () => {
+            selected = null;
+            facts = null;
+        });
     }
+
+    /**
+     * 押したマス。**詳細はこのマスから広がって開き、閉じるとここへ縮んで戻る**
+     * (`morph`。名前は詳細の箱にも付ける。使えないブラウザと動かさない設定ではすぐ出てすぐ消える)
+     */
+    let origin: HTMLElement | null = null;
+    const DETAIL_NAME = 'program-detail';
 
     const serviceName = (id: number) => services.find((s) => s.id === id)?.name ?? '';
 
@@ -212,6 +230,8 @@
     const HOUR = 60 * 60 * 1000;
     /** 5分を1マスにする。細かすぎると行数が増えるだけ、粗いと短い番組が潰れる */
     const SLOT = 5 * 60 * 1000;
+    /** 1 マスの高さ。表の行と今の線の送り (`nowSlots`) の両方がこれを使う */
+    const SLOT_HEIGHT = '0.75rem';
 
     const slots = $derived((data.hours * HOUR) / SLOT);
 
@@ -222,11 +242,15 @@
         return () => clearInterval(timer);
     });
 
-    /** 表示中の日にいまが含まれていれば、その行 */
-    const nowRow = $derived(
-        clock >= data.start && clock < data.start + data.hours * HOUR
-            ? Math.floor((clock - data.start) / SLOT) + 2
-            : null,
+    /**
+     * 表示中の日にいまが含まれていれば、表の頭 (4:00) から何マスぶん下か (端数つき)。
+     *
+     * **線は 1 マス (5 分) ごとに飛ばさず、分の位置へ `translate` で送る。** 行 (`grid-row`) で
+     * 置いていた頃は 5 分ごとに 1 マスずつ跳んでいた。1 分ごとの移りは短い transition でなめらかに
+     * (`.now`。動かさない設定ではすぐ移る)
+     */
+    const nowSlots = $derived(
+        clock >= data.start && clock < data.start + data.hours * HOUR ? (clock - data.start) / SLOT : null,
     );
 
     let grid = $state<HTMLElement | null>(null);
@@ -428,6 +452,7 @@
                     href={href({ type, start: String(data.start) })}
                     data-testid="type-{type}"
                 >
+                    {#if data.type === type}<span class="seg-pill" aria-hidden="true"></span>{/if}
                     {SERVICE_TYPE_LABEL[type]}
                 </a>
             {/each}
@@ -577,7 +602,7 @@
         -->
             <div
                 class="rows"
-                style="grid-template-columns: {TIME_COLUMN} repeat({columns.length}, minmax(11rem, 1fr)); grid-template-rows: auto repeat({slots}, 0.75rem); width: calc({TIME_COLUMN} + {columns.length} * 11rem); min-width: 100%;"
+                style="grid-template-columns: {TIME_COLUMN} repeat({columns.length}, minmax(11rem, 1fr)); grid-template-rows: auto repeat({slots}, {SLOT_HEIGHT}); width: calc({TIME_COLUMN} + {columns.length} * 11rem); min-width: 100%;"
                 data-testid="guide-rows"
             >
                 <!-- 左上の角。時刻列とチャンネル行の交点で、どちらにも追従させる -->
@@ -630,16 +655,16 @@
                         class="hour"
                         style="grid-column: 1; grid-row: {mark.row} / span {mark.span};"
                     >
-                        <span class="hour-label" style="top: {headHeight}px;">
+                        <span class="hour-label num" style="top: {headHeight}px;">
                             {new Date(mark.at).getHours()}
                         </span>
                     </div>
                 {/each}
 
-                {#if nowRow !== null}
+                {#if nowSlots !== null}
                     <div
                         class="now"
-                        style="grid-column: 1 / -1; grid-row: {nowRow};"
+                        style="grid-column: 1 / -1; grid-row: 2; translate: 0 calc({nowSlots} * {SLOT_HEIGHT});"
                         bind:this={nowMark}
                         data-testid="now-line"
                     >
@@ -662,7 +687,7 @@
                         `block` にして高さの半分だけ上げれば、字が変わっても線の上に乗る
                     -->
                         <span
-                            class="now-label"
+                            class="now-label num"
                             style="width: {TIME_COLUMN};"
                         >
                             {time(clock)}
@@ -696,11 +721,11 @@
                             class:reserved={program.reservation_state && program.reservation_state !== 'skipped'}
                             data-state={program.reservation_state}
                             data-genre={program.genres?.[0]}
-                            onclick={() => void open(program)}
+                            onclick={(event) => void open(program, event.currentTarget)}
                             data-testid="program-button"
                         >
                             <span class="title">
-                                {time(program.start_at)}
+                                <span class="num">{time(program.start_at)}</span>
                                 {#if program.name}
                                     <span class="broadcast">{program.name}</span>
                                 {:else}
@@ -731,7 +756,7 @@
 <!-- 番組の中身。**二段組の外に置く** (中に入れると巻き取る箱の中で開くことになる) -->
 {#if selected && facts}
     {@const program = selected}
-    <ProgramDetail program={facts} onclose={close}>
+    <ProgramDetail program={facts} onclose={close} transitionName={DETAIL_NAME}>
         {#snippet actions()}
             <!--
                 失敗の理由は詳細の中に出す。番組表にインラインで足すと、その分だけ
@@ -1066,6 +1091,8 @@
         z-index: 10;
         pointer-events: none;
         border-top: 2px solid var(--dp-error);
+        /* 1 分ごとの移りを飛ばさずに (上の `nowSlots`) */
+        transition: translate var(--dp-duration-slow) var(--dp-ease);
     }
     .now-label {
         position: sticky;
