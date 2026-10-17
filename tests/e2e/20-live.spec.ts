@@ -1678,6 +1678,18 @@ test.describe('スマホの縦でライブ', () => {
             await page.getByTestId('live-more').tap();
             await expect(sound).toBeHidden();
             expect(await oneRowTroubles(page, 'live-buttons'), `${width}px (閉じたあと)`).toEqual([]);
+
+            // メニュー (エンコード方式) の外を押しても閉じるだけ。押した局には替わらない (もう一度押せば替わる)
+            await page.getByTestId('live-more').tap();
+            await page.getByTestId('live-codec').tap();
+            const codecMenu = page.getByTestId('live-codec-menu');
+            await expect(codecMenu).toBeVisible();
+            const other = page.getByTestId('live-channel').nth(1);
+            await other.tap();
+            await expect(codecMenu).toBeHidden();
+            await expect(other).not.toHaveAttribute('data-current', 'true');
+            await other.tap();
+            await expect(other).toHaveAttribute('data-current', 'true');
         }
     });
 });
