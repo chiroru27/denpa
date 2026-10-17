@@ -281,11 +281,21 @@ export const actions = {
             if (match !== null) rows.add(Number(match[1]));
         }
 
+        /*
+         * 消す行は「×」の 2 回目 (`delete` にその行の番号)。足すための空の行は `new` に番号が来る。
+         * **名前を空にしても消さない** — その場で保存するので、欄を空にして離れただけで
+         * チューナーが消えていた。空の名前は断り、画面は元の名前に戻す (`autosave`)
+         */
+        const drop = form.get('delete') === null ? null : Number(form.get('delete'));
+        const added = form.get('new') === null ? null : Number(form.get('new'));
         const tuners: TunerConfig[] = [];
         for (const index of [...rows].sort((a, b) => a - b)) {
             const name = String(form.get(`name.${index}`) ?? '').trim();
-            // 名前を空にした行は「消した」とみなす
-            if (name === '') continue;
+            if (index === drop) continue;
+            if (name === '') {
+                if (index === added) continue;
+                return fail(400, { message: '名前は空にできません' });
+            }
 
             const types = TYPES.filter((type) => form.get(`type.${index}.${type}`) !== null);
             if (types.length === 0) {
@@ -308,7 +318,8 @@ export const actions = {
         } catch (error) {
             return fail(502, { message: String(error) });
         }
-        return { success: true, done: `チューナー ${tuners.length} 台を保存しました` };
+        // 画面はその場で保存して、見出しの横に「保存しました」を出す (`autosave`)。通知は出さない
+        return { success: true };
     },
 
     /** 定義を消して自動検出に戻す。刺さっている機材をエージェントが自分で見つける */
@@ -318,7 +329,7 @@ export const actions = {
         } catch (error) {
             return fail(502, { message: String(error) });
         }
-        return { success: true, done: '自動検出に戻しました' };
+        return { success: true };
     },
 
     /** 走っているスキャンを中断する。設定は書き換えないまま止まる */
