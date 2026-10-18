@@ -1,11 +1,13 @@
 <script lang="ts">
     import { untrack } from 'svelte';
     import {
+        changed,
         EVERY,
         ease,
         FADE,
         FADE_STEPS,
         farthest,
+        frameDelta,
         GLANCE,
         type GlowLayout,
         glowLayout,
@@ -92,6 +94,8 @@
     let lit = $state(false);
     /** 写した回数。E2E が「動いている・止まっている」を見る */
     let updates = $state(0);
+    /** 最後に写した1枚と、最後に入れ替えた1枚の違い (`frameDelta`)。E2E が「止まった映像では 0 に近い」を見る */
+    let delta = $state<number | null>(null);
 
     const now = $derived(plan({ on: ambient.on, room, fullscreen, hidden, reduced, playing: ambient.playing, lit }));
     /** 光を出しているか。置き場はこれが変わったときだけ測り直す (写す・止めるの切り替えでは測らない) */
@@ -163,6 +167,9 @@
         const pixels = framePixels(bitmap);
         bitmap.close();
         if (pixels === null) return;
+        // 最後に入れ替えた1枚との違い。小さければ入れ替えない (`ambient.ts` の `changed`)
+        delta = colors === null ? null : frameDelta(colors, pixels);
+        if (colors !== null && !changed(colors, pixels)) return;
         colors = Float32Array.from(pixels);
         if (layout === null) return;
         clearInterval(fading);
@@ -402,6 +409,7 @@
     data-off={now === 'off' ? '' : undefined}
     data-plan={now}
     data-updates={updates}
+    data-delta={delta === null ? undefined : delta.toFixed(2)}
     data-testid={testid}
     aria-hidden="true"
 >
