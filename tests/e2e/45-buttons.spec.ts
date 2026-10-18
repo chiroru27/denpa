@@ -37,10 +37,10 @@ test.describe('ボタンの見た目', () => {
             probe.remove();
             return color;
         });
-        const prev = await look(page.getByTestId('prev-day'));
-        expect(prev.border).toBe('rgba(0, 0, 0, 0)');
-        expect(prev.background).not.toBe('rgba(0, 0, 0, 0)');
-        expect(prev.radius).toBeGreaterThanOrEqual(prev.height / 2);
+        const tonal = await look(page.getByTestId('guide-genres'));
+        expect(tonal.border).toBe('rgba(0, 0, 0, 0)');
+        expect(tonal.background).not.toBe('rgba(0, 0, 0, 0)');
+        expect(tonal.radius).toBeGreaterThanOrEqual(tonal.height / 2);
 
         // 主のボタンの代表は検索の画面の「ルールとして保存」
         await goto(page, `/search?q=${encodeURIComponent('どこにも無い番組')}`);
@@ -53,8 +53,8 @@ test.describe('ボタンの見た目', () => {
 
         test('小さいボタンも高さ 40px 以上、アイコンのボタンは円', async ({ page }) => {
             await goto(page, '/guide?type=GR');
-            for (const id of ['prev-day', 'next-day', 'type-GR', 'type-BS']) {
-                expect((await look(page.getByTestId(id))).height).toBeGreaterThanOrEqual(40);
+            for (const id of ['guide-day', 'guide-jump-6', 'guide-genres', 'type-GR', 'type-BS']) {
+                expect((await look(page.getByTestId(id).first())).height, id).toBeGreaterThanOrEqual(40);
             }
             const toggle = await look(page.getByTestId('theme-toggle'));
             expect(toggle.height).toBeGreaterThanOrEqual(40);
