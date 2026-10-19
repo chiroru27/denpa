@@ -228,8 +228,8 @@
         .page {
             display: grid;
             grid-template-columns: 14rem minmax(0, 1fr);
-            height: calc(100% + 2 * var(--dp-gutter));
-            margin: calc(-1 * var(--dp-gutter));
+            height: calc(100% + var(--dp-page-top) + var(--dp-gutter));
+            margin: calc(-1 * var(--dp-page-top)) calc(-1 * var(--dp-gutter)) calc(-1 * var(--dp-gutter));
         }
     }
     @media (min-width: 1280px) {
@@ -348,7 +348,7 @@
     }
     @media (min-width: 768px) {
         .main-inner {
-            padding: var(--dp-gutter);
+            padding: var(--dp-page-top) var(--dp-gutter) var(--dp-gutter);
         }
     }
     /*
