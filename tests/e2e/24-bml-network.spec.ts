@@ -149,6 +149,25 @@ test.describe('データ放送の双方向', () => {
     });
 
     /*
+     * **http の Hybridcast のアプリの中継** (`server/hc-relay.ts`)。合言葉は http のアプリにだけ出し、
+     * 中継は合言葉の配信元へだけ、`/api/bml/proxy` と同じ枠で繋ぐ (内側は断る)
+     */
+    test('http のアプリの中継は、合言葉の配信元へだけ、内側は断って繋ぐ', async ({ request }) => {
+        const issue = async (url: string) => request.post('/api/bml/hc', { data: { url } });
+        expect(await (await issue('https://hc.example.jp/p/')).json()).toEqual({ root: null });
+        expect((await issue('file:///etc/passwd')).status()).toBe(400);
+
+        const { root } = (await (await issue('http://127.0.0.1/p/index.html')).json()) as { root: string };
+        expect(root).toMatch(/^api\/bml\/hc\/[0-9a-f]{32}\/$/);
+        // 配信元が内側なので、中継しても断る (502)
+        expect((await request.get(`/${root}p/index.js`)).status()).toBe(502);
+        // 知らない合言葉は 404
+        expect((await request.get('/api/bml/hc/0123456789abcdef0123456789abcdef/p/index.js')).status()).toBe(
+            404,
+        );
+    });
+
+    /*
      * **Hybridcast はデータ放送が起動を求めたときに開く** ([stream.md](../../docs/stream.md#hybridcast))。
      *
      * アプリは合成のもの (本物の放送局のアプリは入れない)。中継の返りを差し替えて、
