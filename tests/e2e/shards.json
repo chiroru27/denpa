@@ -12,7 +12,8 @@
         "37-playback",
         "40-watch-compat",
         "42-copy-never",
-        "45-buttons"
+        "45-buttons",
+        "50-live-pacing"
     ],
     "2": [
         "03-recording",
@@ -38,15 +39,7 @@
         "34-live-yield",
         "46-home-timeline"
     ],
-    "4": [
-        "01-dashboard",
-        "02-reservation",
-        "11-rule-edit",
-        "15-scramble",
-        "17-logo",
-        "39-watch-stream",
-        "50-live-pacing"
-    ],
+    "4": ["01-dashboard", "02-reservation", "11-rule-edit", "15-scramble", "17-logo", "39-watch-stream"],
     "5": [
         "04-external-delete",
         "05-rules",
