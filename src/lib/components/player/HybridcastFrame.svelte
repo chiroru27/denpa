@@ -9,6 +9,7 @@
      * - 通信は中継 (`/api/bml/proxy`・`/api/bml/post`) を通す。決まり (公開アドレスだけ・10 秒・4MB・
      *   cookie も UA も受信機を見分けるものも送らない) はデータ放送と同じ
      * - 受信機の記憶はアプリごとに分けて覚える (`storageKey`)
+     * - データ放送の Greg と NVRAM を写して渡し、書かれたら戻す (`broadcast`・`onwrite`。`#lib/hybridcast/compat.ts`)
      */
     import { onDestroy } from 'svelte';
     import type { Service } from '#lib/bml/engine.js';
@@ -23,6 +24,8 @@
         storageKey,
         VIEWPORT,
     } from '#lib/hybridcast/app.js';
+    import type { CompatInit } from '#lib/hybridcast/compat.js';
+    import compat from '#lib/hybridcast/compat.ts?inject';
     import { read, write } from '#lib/keep.js';
     import type { HybridcastLink } from '#lib/live.js';
     import { resolve } from '$app/paths';
@@ -34,6 +37,10 @@
         app: HybridcastLink;
         /** いまの局・番組・字幕。変わったらアプリへ送り直す */
         hc: HcState;
+        /** データ放送の Greg と NVRAM (ページを開くたびに読む。前のページが書いた Greg も渡す) */
+        broadcast: () => CompatInit;
+        /** アプリが Greg・NVRAM に書いた (`who` はいまのページを開いた局) */
+        onwrite: (change: Extract<FrameMessage, { type: 'greg' | 'nvram' }>, who: CompatInit['who']) => void;
         /** 閉じてデータ放送へ戻る */
         onclose: () => void;
         /** 選局 (データ放送の epgTune と同じ範囲)。できなければ false */
@@ -45,7 +52,7 @@
         press?: ((code: number, down: boolean) => void) | null;
     }
 
-    let { app, hc, onclose, ontune, oncaptions, onvideo, press = $bindable(null) }: Props = $props();
+    let { app, hc, broadcast, onwrite, onclose, ontune, oncaptions, onvideo, press = $bindable(null) }: Props = $props();
 
     let box = $state<HTMLDivElement | null>(null);
     let frame = $state<HTMLIFrameElement | null>(null);
@@ -63,6 +70,8 @@
     /** iframe を開き直すたびに変える (同じ入れ物を読み直させる) */
     let round = $state(0);
     let gone = false;
+    /** いまのページを開いた局 (アプリの NVRAM はこの局の領域) */
+    let opened: CompatInit['who'] = { originalNetworkId: null, serviceId: null };
     // svelte-ignore state_referenced_locally
     const key = storageKey(app.organisationId, app.applicationId);
 
@@ -98,6 +107,8 @@
             const text = decodeHtml(body, response.headers.get('content-type') ?? '');
             const relay = await relayFor(target);
             if (target !== url) return;
+            const given = broadcast();
+            opened = given.who;
             html = prepareApp(text, {
                 url: target,
                 organisationId: app.organisationId,
@@ -105,7 +116,10 @@
                 storage: remembered(),
                 state: $state.snapshot(hc),
                 relay,
-            });
+                compat: given,
+            },
+            compat,
+            );
             hand();
         } catch (failure) {
             if (target !== url) return;
@@ -199,6 +213,10 @@
                 break;
             case 'log':
                 console.warn(`[hybridcast] ${message.message}`);
+                break;
+            case 'greg':
+            case 'nvram':
+                onwrite(message, opened);
                 break;
             case 'navigate':
                 navigate(message.url);
