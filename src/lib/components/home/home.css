@@ -274,6 +274,8 @@
 .board .row-bar {
   position: absolute;
   inset-inline: 0.75rem;
+  /* Pico の `progress` は幅 100%、ブラウザの既定にも固有の幅がある。左右の寄せの内側の幅を明示する */
+  width: calc(100% - 1.5rem);
   bottom: 0.25rem;
   height: 3px;
   border-radius: 2px;
