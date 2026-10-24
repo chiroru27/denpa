@@ -13,7 +13,10 @@
   import { submitting } from "#lib/actions.js";
   import { arming } from "#lib/arming.svelte.js";
   import {
+    type HomeControls,
     type Item,
+    type Missed,
+    type Rec,
     type Res,
     setHome,
   } from "#lib/components/home/context.js";
@@ -140,9 +143,7 @@
    * `saveOffline` が決める (既定 AV1、端末がデコードできなければ H.264)。
    * Background Fetch ならタブを閉じても続くので、押したら詳細は閉じる
    */
-  async function saveToDevice(
-    rec: (typeof data.recordings)[number],
-  ): Promise<void> {
+  async function saveToDevice(rec: Rec): Promise<void> {
     try {
       await saveOffline(rec);
       offlineNote = {
@@ -171,7 +172,7 @@
    */
   let detailCmNote = $state<string | null>(null);
   /** 詳細を開いている録画。**予約から開いたときは null** (操作は recordingActions) */
-  let detailRec = $state<(typeof data.recordings)[number] | null>(null);
+  let detailRec = $state<Rec | null>(null);
   /**
    * 詳細を開いている予約。**録画・録り逃しから開いたときは null** (操作は reservationActions)。
    *
@@ -204,7 +205,7 @@
   }
 
   /** 予約の行から開く。取消を詳細の中にも出す (reservationActions) */
-  function openReservation(res: (typeof data.reservations)[number]): void {
+  function openReservation(res: Res): void {
     openDetail(res.program_id, res);
     detailResId = res.id;
   }
@@ -222,7 +223,7 @@
    * ファイルが残っていることはあるが、頭からスクランブルが掛かっていたり
    * 中身が空だったりで、押しても何も映らない
    */
-  function watchLink(rec: (typeof data.recordings)[number]): string | null {
+  function watchLink(rec: Rec): string | null {
     if (rec.deleted_at !== null || rec.state === "failed") return null;
     if (rec.library_path !== null) return resolve(`watch/${rec.id}`);
     /*
@@ -241,7 +242,7 @@
    * **まだ観ていない** (一覧の点)。観終えた時刻 (`watched_at`) が無く、続きの位置も無いもの。
    * 途中まで観たものは進捗バーのほうで分かるので点は付けない。観られないものにも付けない
    */
-  function unwatched(rec: (typeof data.recordings)[number]): boolean {
+  function unwatched(rec: Rec): boolean {
     return (
       rec.watched_at === null &&
       rec.resume_ms === null &&
@@ -258,7 +259,7 @@
    * ファイルを持っているか。**端末に保存と「その他…」を出すかどうか。**
    * エンコードの失敗はここに出てこない — 落ちたのは再エンコードのほうで、元のTSは無事なので観られる
    */
-  function hasFile(rec: (typeof data.recordings)[number]): boolean {
+  function hasFile(rec: Rec): boolean {
     if (rec.deleted_at !== null) return false;
     if ((rec.library_path ?? rec.ts_path) === null) return false;
     return rec.state !== "failed";
@@ -270,7 +271,7 @@
    * 失敗の理由は**ここでしか出さない** (一覧の行の高さを揃えるため)。
    * 理由は3種類あって、それぞれ別物なので見出しを付けて分けて渡す
    */
-  function openRecording(rec: (typeof data.recordings)[number]): void {
+  function openRecording(rec: Rec): void {
     const notes: { title: string; text: string }[] = [];
     // error 列に入るのは**録画そのものの失敗だけ**。エンコードの理由は encode_error
     if (rec.state === "failed" && rec.error) {
@@ -290,7 +291,7 @@
    * 録り逃しの詳細。**失敗した録画と同じ形**で、開いたときに理由を出す。
    * チューナー不足で落とされたものは予約が理由を持っている (conflict_reason)
    */
-  function openMissed(res: (typeof data.missed)[number]): void {
+  function openMissed(res: Missed): void {
     const text =
       res.conflict_reason ??
       "アプリが止まっていたなどの理由で、録画を始められないまま放送が終わりました";
@@ -658,6 +659,20 @@
     pinned,
     onpick: (day: number) => void pickDay(day),
   });
+  /** 頭の1行 (`TimelineBar`) とサイドバー (`HomeAside`) が同じものを受ける */
+  const controls = $derived<HomeControls>({
+    filter,
+    setFilter,
+    counts,
+    grouped,
+    setGrouped,
+    finishedHref,
+    deletedHref,
+    showFinished: data.showFinished,
+    showDeleted: data.showDeleted,
+    capacity: data.capacity,
+    encoding,
+  });
 
   setHome({
     get clock() {
@@ -726,19 +741,7 @@
 <div class="board">
   <Toasts {notices} source={form} ondismiss={dropNote} />
 
-  <TimelineBar
-    {filter}
-    {setFilter}
-    {counts}
-    {grouped}
-    {setGrouped}
-    {finishedHref}
-    {deletedHref}
-    showFinished={data.showFinished}
-    showDeleted={data.showDeleted}
-    capacity={data.capacity}
-    {encoding}
-  />
+  <TimelineBar {...controls} />
 
   <div class="t-main">
     <section
@@ -808,20 +811,7 @@
       {/if}
     </section>
 
-    <HomeAside
-      {filter}
-      {setFilter}
-      {counts}
-      {grouped}
-      {setGrouped}
-      {finishedHref}
-      {deletedHref}
-      showFinished={data.showFinished}
-      showDeleted={data.showDeleted}
-      {encoding}
-      capacity={data.capacity}
-      {calendar}
-    />
+    <HomeAside {...controls} {calendar} />
   </div>
 </div>
 
@@ -879,11 +869,8 @@
 {/snippet}
 
 <!--
-    その1本に対する操作。**一覧の行ではなくここに置く。**
-
-    行に並べていた頃は「詳細・ダウンロード・再エンコード・削除」が横に並び、
-    狭い画面では枠から流れ出していた。再生は行そのものなので、行に残すのは
-    入口 (詳細) と、取り返しのつかない削除だけにしてある
+    その1本に対する操作。**一覧の行ではなくここに置く** (行に並べていた頃は狭い画面で枠から流れ出した)。
+    行に残すのは入口 (詳細) と削除だけ
 -->
 {#snippet recordingActions()}
   {#if detailRec !== null}
@@ -944,15 +931,9 @@
     </a>
     {#if hasFile(rec)}
       <!--
-                **めったに押さないものの置き場。** 上に開く (フッターは画面の
-                下端にあるので、下に開くと枠から出る)。中身は上から
+                **めったに押さないものの置き場。** 上に開く (フッターは画面の下端にある)。中身は上から
                 視聴済みの付け外し、直すもの (再エンコード・CM検出) の順。
-
-                **開け閉めは `Menu` (popover)。** 位置は画面に収まるようにずらす。
-
-                **閉じている間も中身は DOM に置く。** どの項目が出るかを
-                開かずに確かめられるように (e2e が数を見ている)。閉じた popover は
-                `display: none` — 見えないまま居座ってクリックを食うことが無い
+                閉じている間も中身は DOM に置く (どの項目が出るかを e2e が開かずに数えている)
             -->
       <Menu side="top" align="end" class="more-menu" testid="detail-more-menu">
         {#snippet trigger(props)}

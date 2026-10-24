@@ -1,8 +1,10 @@
 <script lang="ts">
   import { untrack } from "svelte";
+  import { MediaQuery } from "svelte/reactivity";
   import { dragScroll, submitting } from "#lib/actions.js";
   import { GENRE_TREE } from "#lib/arib.js";
   import ChannelNotice from "#lib/components/ChannelNotice.svelte";
+  import { guideNavigation } from "#lib/components/GuidePending.svelte";
   import Menu from "#lib/components/Menu.svelte";
   import NowLine from "#lib/components/NowLine.svelte";
   import ProgramDetail from "#lib/components/ProgramDetail.svelte";
@@ -31,9 +33,9 @@
     type GridProgram,
     type GuideSheet,
   } from "#lib/types.js";
+  import type { SubmitFunction } from "$app/forms";
   import { preloadData } from "$app/navigation";
   import { resolve } from "$app/paths";
-  import { navigating } from "$app/state";
   import Ellipsis from "~icons/lucide/ellipsis";
   import Layers from "~icons/lucide/layers";
   import Palette from "~icons/lucide/palette";
@@ -89,34 +91,15 @@
    *
    * 外枠 (局の並び) が届くまでは前の表がそのまま残り、押しても何も起きていないように見えた。
    * 押したらすぐマスを骨組みに替え、放送波が変わるなら局名の行も骨組みにする
-   * (同じ放送波の別の日なら局の並びはほぼ同じなので、そのまま残す)。
-   *
-   * 終わりは `navigating.complete` で見る (`+layout.svelte` の `pending` と同じ。`navigating` は
-   * 畳まれた遷移で真のまま残るので当てにしない)
+   * (同じ放送波の別の日なら局の並びはほぼ同じなので、そのまま残す)
    */
-  let switchingTo = $state<URL | null>(null);
-  $effect(() => {
-    const done = navigating.complete;
-    const to = navigating.to;
-    if (done === null || to === null || to.route.id !== "/guide") {
-      switchingTo = null;
-      return;
-    }
-    switchingTo = to.url;
-    let stale = false;
-    const settle = (): void => {
-      if (!stale) switchingTo = null;
-    };
-    void done.then(settle, settle);
-    return () => {
-      stale = true;
-    };
-  });
+  const toGuide = guideNavigation();
   /** 押した先の放送波。今と同じ日・同じ放送波 (読み直し・同じリンク) なら null */
   const switching = $derived.by(() => {
-    if (switchingTo === null) return null;
-    const type = switchingTo.searchParams.get("type") ?? "GR";
-    const start = switchingTo.searchParams.get("start");
+    const to = toGuide.to;
+    if (to === null) return null;
+    const type = to.searchParams.get("type") ?? "GR";
+    const start = to.searchParams.get("start");
     if (type === data.type && (start === null || Number(start) === data.start))
       return null;
     return { type };
@@ -166,19 +149,9 @@
   }
 
   /**
-   * 一度に描くマスの数。
-   *
-   * **表が届いた瞬間に画面が止まって見えるのは、マスを一度に全部描くから。**
-   * BS/CS は局が多く、24時間ぶんで数千個の `<button>` になる。骨組みを出して
-   * 待たせないようにしても、届いたあとの描画で同じだけ止まっていた。
-   * 先頭 (開始時刻順なので朝の 4:00 側) から数百個ずつ、描画の合間
-   * (`requestAnimationFrame`) に足していけば、1コマあたりの仕事は数十ms に収まり、
-   * 描いている最中でもスクロールもタブの切り替えもできる。
-   *
-   * e2e の偽の放送 (数十番組) なら最初の1回で全部出て、
-   * 実データの地上波 (20局×24時間 ≒ 500〜700) でも1〜2コマで済む数。
-   * 画面の外のマスは中身を組まない (下の `.cell` の `content-visibility`) ので、
-   * 1コマの仕事は「マスを置く」だけになり、数を増やしても止まらない
+   * 一度に描くマスの数。BS/CS は24時間ぶんで数千個の `<button>` になり、一度に描くと表が届いた瞬間に止まって見えた。
+   * 先頭から数百個ずつ描画の合間 (`requestAnimationFrame`) に足せば、描いている最中もスクロールやタブの切り替えができる。
+   * 地上波 (500〜700 マス) なら1〜2コマで済む数。画面の外のマスは中身を組まない (`.cell` の `content-visibility`)
    */
   const CELL_CHUNK = 600;
   /** いま描いているマスの数。`Infinity` なら全部 */
@@ -222,10 +195,9 @@
    * **マスは局ごとの箱 (`.station`) に入れて置く。** 箱は本チャンネルとそのサブの列をまとめたもの
    * (サブの列へ横に伸びるマスがあるので、列ごとには分けられない)。
    *
-   * 箱に `content-visibility: auto` を付けると、横に外れた局は箱ごと中身の見た目の計算と
-   * レイアウトを飛ばせる。マスにだけ付けていた頃は、画面の外のマスも 1 つずつ見た目を計算していて、
-   * 地上波 22 局・658 マスで表が届いてからの 1 回の処理が 190ms ほどかかり、その大半がそれだった
-   * (測り方と数字は PR に)。縦に外れたマスは、これまでどおりマスごとの `content-visibility` で飛ばす。
+   * 箱に `content-visibility: auto` を付けると、横に外れた局は箱ごと見た目の計算とレイアウトを飛ばせる
+   * (マスにだけ付けていた頃は、地上波 658 マスで表が届いてからの 1 回の処理が 190ms ほどかかっていた)。
+   * 縦に外れたマスは、マスごとの `content-visibility` で飛ばす。
    *
    * 箱の中は自前の grid。行は外の表と同じ 5 分 × `SLOT_HEIGHT`、列は箱の幅を等分する
    * (外の列はどれも同じ幅なので揃う)。`subgrid` は使えない — `content-visibility` が付けるレイアウトの
@@ -331,6 +303,14 @@
     facts = null;
   }
 
+  /** 予約・取消を送ったあと。失敗したときは開いたままにして、中に理由を出す */
+  const closeOnSuccess: SubmitFunction =
+    () =>
+    async ({ result, update }) => {
+      await update();
+      if (result.type === "success") close();
+    };
+
   const serviceName = (id: number) =>
     services.find((s) => s.id === id)?.name ?? "";
 
@@ -400,9 +380,7 @@
    * 開いたときに「いま」が見えている状態にする。24時間ぶん出るので、
    * 先頭(4:00)のままだと毎回スクロールさせることになる。
    *
-   * 位置は offsetTop では測れない。offsetTop は「位置指定された親」からの距離で、
-   * ここでは body が親になるため、ナビや見出しの高さまで足し込まれて
-   * その分だけ下に行き過ぎる。実際に見えている位置の差から出す。
+   * 位置は offsetTop では測れない (親が body になり、ナビや見出しの高さまで足し込まれる)。見えている位置の差から出す (`nowTop`)。
    *
    * **マスを待たずに動かす。** 局名の行と時刻の列は先に出ていて、行の高さも決まっているので、
    * 骨組みのうちに「いま」の位置まで送っておける (届いたときに動かない)。
@@ -415,15 +393,8 @@
 
     const target = grid;
     const mark = nowMark;
-    // 「いま」を上端ちょうどに置くと直前の番組が見えず、放送中のものが
-    // 頭から切れて分かりにくい。画面の4分の1あたりに来るようにする
     const place = () => {
-      const top =
-        mark.getBoundingClientRect().top - target.getBoundingClientRect().top;
-      target.scrollTop = Math.max(
-        0,
-        target.scrollTop + top - target.clientHeight / 4,
-      );
+      target.scrollTop = Math.max(0, nowTop(target, mark));
     };
 
     place();
@@ -472,6 +443,8 @@
     const entry = (day: { start: number; has: boolean }) => ({
       ...day,
       label: dayLabel(day.start),
+      name: `${day.start === data.today ? "今日 " : ""}${date(day.start)}`,
+      weekday: weekday(day.start),
       today: day.start === data.today,
       past: day.start < data.today,
     });
@@ -489,9 +462,9 @@
     return text.slice(text.indexOf("/") + 1);
   }
 
-  function weekday(start: number): "sat" | "sun" | null {
+  function weekday(start: number): "sat" | "sun" | "" {
     const day = new Date(start).getDay();
-    return day === 6 ? "sat" : day === 0 ? "sun" : null;
+    return day === 6 ? "sat" : day === 0 ? "sun" : "";
   }
 
   /**
@@ -595,11 +568,18 @@
     scrollGrid(slot * Number.parseFloat(SLOT_HEIGHT) * rem);
   }
 
-  function jumpNow(): void {
-    if (grid === null || nowMark === null) return;
+  /**
+   * 「いま」を表の4分の1あたりに置く縦位置。上端ちょうどに置くと直前の番組が見えず、
+   * 放送中のものが頭から切れて分かりにくい
+   */
+  function nowTop(box: HTMLElement, mark: HTMLElement): number {
     const top =
-      nowMark.getBoundingClientRect().top - grid.getBoundingClientRect().top;
-    scrollGrid(grid.scrollTop + top - grid.clientHeight / 4);
+      mark.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    return box.scrollTop + top - box.clientHeight / 4;
+  }
+
+  function jumpNow(): void {
+    if (grid !== null && nowMark !== null) scrollGrid(nowTop(grid, nowMark));
   }
 
   /**
@@ -616,14 +596,8 @@
   let highlight = $state<number | null>(null);
 
   /** 狭い画面では操作の1行が下にあるので、メニューは上へ開く */
-  let narrow = $state(false);
-  $effect(() => {
-    const query = matchMedia("(max-width: 767px)");
-    const sync = () => (narrow = query.matches);
-    sync();
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
-  });
+  const narrowQuery = new MediaQuery("max-width: 767px");
+  const narrow = $derived(narrowQuery.current);
   const menuSide = $derived(narrow ? "top" : "bottom");
 
   /*
@@ -640,21 +614,11 @@
   });
 
   /*
-   * 前日・翌日を先に取り寄せておく。
+   * 前日・翌日を先に取り寄せておく。`data-sveltekit-preload-data="hover"` は指を乗せてからなので、狙って押すと間に合わない。
    *
-   * 押してから読み込むと、24時間ぶんの番組を引き直して組み直す間だけ止まって見えた。
-   * body の `data-sveltekit-preload-data="hover"` は指を乗せてからなので、
-   * 狙って押すと間に合わない。表を出した時点で両隣を取っておけば、押した瞬間に出る。
-   *
-   * **開くのが終わってから**取得する。すぐ投げていた頃は、いま見たい番組表と
-   * 前後2日ぶんを同時に取ることになり、初めの表示そのものが遅くなっていた。
-   * 「終わってから」は**マスを描き終わってから** (`drawing` が下りてから) —
-   * 表が届いた時点で投げていた頃は、マスを描いている最中に BS で 1 件 1 MB 超の
-   * 応答が 2 つ届いて、その解読が描画と取り合っていた。
-   * **描き終わってもすぐには投げない** (`PREFETCH_DELAY`)。マスを置き終えた直後は、そのぶんの
-   * レイアウトがまだ走っていて、本番では描き終わった直後の空き
-   * (`requestIdleCallback`) で投げた 2 つがそれと重なっていた。少し置いてから、空いたときに投げる。
-   * requestIdleCallback は Safari に無いので、無ければ置くだけ。
+   * **マスを描き終わってから** (`drawing` が下りてから) 取得する。表が届いた時点で投げていた頃は、BS で 1 件 1 MB 超の
+   * 応答の解読が描画と取り合っていた。描き終わった直後もレイアウトが走っているので、少し置いて (`PREFETCH_DELAY`)
+   * 空いたとき (`requestIdleCallback`。Safari には無いので置くだけ) に投げる。
    * 同じ日・同じ放送波の読み直しでは取り直さない (`prefetchedFor`)
    */
   const PREFETCH_DELAY = 1000;
@@ -690,14 +654,9 @@
 
 <!--
     **表は画面の残りをぜんぶ使う。** 枠 (カード) で囲まず、本文の余白も打ち消して
-    端から端まで表にする (`.page` の負のマージン)。1画面に入る局と時間を増やすため。
-    広い幅の高さは `+layout.svelte` の `FILLED` から `%` で降ろす。
-
-    **狭い幅だけ `%` で降ろせない** (途中の入れ物に高さが決まっておらず、`%` が解決しない)。
-    そこは `svh` で採る — `svh` だけが見えている範囲を超えない
-    (`vh` と `dvh` は実機の PWA でアドレスバーの高さぶん超えた)。天井なので小さく出る側に倒す
+    端から端まで表にする (`app.css` の `.guide-frame`)。1画面に入る局と時間を増やすため
 -->
-<div class="page">
+<div class="guide-frame">
   <!--
         **どこを見るかは表の外の細い1行にまとめる** (種別・日付・時刻・サブch・ジャンル)。縦は表に回す。
 
@@ -706,11 +665,11 @@
         局名の行に入れると、操作の幅のぶん局名が隠れる。表の外の1行なら、
         隠れるものも押す回数も増えない。
 
-        **狭い画面では表の下、下のタブのすぐ上に置く** (親指が届く。`.toolbar` の `order`)。
+        **狭い画面では表の下、下のタブのすぐ上に置く** (親指が届く。`.guide-bar` の `order`)。
         DOM の順 (種別 → 日付 → 時刻 → …) は読み上げの順なので変えない。
         入りきらない幅では、時刻のボタンを「⋯」に、さらに狭いと日付のメニューに移す
     -->
-  <div class="toolbar" data-testid="guide-toolbar">
+  <div class="toolbar guide-bar" data-testid="guide-toolbar">
     <div role="group" class="types segmented" data-testid="type-tabs">
       {#each CHANNEL_TYPES as type (type)}
         <a
@@ -747,15 +706,13 @@
           {@const selected = day.start === data.start}
           {#if day.has || selected}
             <a
-              class="day-chip {weekday(day.start) ?? ''}"
+              class="day-chip {day.weekday}"
               class:selected
               class:present={day.today}
               class:past={day.past}
               href={href({ start: String(day.start) })}
               aria-current={selected ? "date" : undefined}
-              aria-label={day.start === data.today
-                ? `今日 ${date(day.start)}`
-                : date(day.start)}
+              aria-label={day.name}
               data-testid="guide-day"
               data-start={day.start}
               >{#if day.today}<span class="today-mark">今日</span
@@ -764,7 +721,7 @@
           {:else}
             <!-- 番組がまだ届いていない日。並びの幅を保つために置いて、押せなくする -->
             <span
-              class="day-chip disabled {weekday(day.start) ?? ''}"
+              class="day-chip disabled {day.weekday}"
               title="番組表がまだありません"
               data-testid="guide-day"
               data-start={day.start}
@@ -791,20 +748,17 @@
           {@const selected = day.start === data.start}
           {#if day.has || selected}
             <a
-              class="menu-item {weekday(day.start) ?? ''}"
+              class="menu-item {day.weekday}"
               class:selected
               class:past={day.past}
               role="menuitem"
               href={href({ start: String(day.start) })}
-              aria-current={selected ? "date" : undefined}
-              >{day.start === data.today
-                ? `今日 ${date(day.start)}`
-                : date(day.start)}</a
+              aria-current={selected ? "date" : undefined}>{day.name}</a
             >
           {:else}
             <button
               type="button"
-              class="menu-item {weekday(day.start) ?? ''}"
+              class="menu-item {day.weekday}"
               role="menuitem"
               aria-disabled="true"
               data-disabled
@@ -1024,16 +978,8 @@
       aria-busy={!showCells || drawing ? "true" : undefined}
     >
       <!--
-            **横幅を数えて入れておく。**
-
-            列の合計 (5688px) より外側の枠が狭いままだと、grid はそこからはみ出して
-            描かれるだけで、枠自体は画面の幅 (358px) のまま残る。`sticky` は
-            親の枠から外へは出られない決まりなので、時刻の列は
-            「画面の幅 − 列の幅」ぶんしか付いてこられず、そこから先は
-            置いていかれていた (390px の端末だと 302px スクロールしたところで脱落)。
-
-            幅を列の合計にしておけば、端まで付いてくる。局が少なくて画面のほうが
-            広いときは min-width で伸ばし、余りは 1fr が分け合う
+            **横幅を列の合計にしておく。** 外側の枠が画面の幅のままだと、`sticky` の時刻の列は枠から出られず、
+            「画面の幅 − 列の幅」ぶん送ったところで置いていかれた。局が少ないときは min-width で伸ばし、余りは 1fr が分け合う
         -->
       <div
         class="rows"
@@ -1082,17 +1028,9 @@
         {/each}
 
         <!--
-                時刻の列。**横にも縦にも追従させる。**
-
-                横は列そのものを `sticky` (`left: 0`) で置いておけば済む。縦は
-                そうはいかない。1マス(5分)ずつでは細かすぎるので1時間を1つの
-                グリッド領域にしているが、そうすると数字はその領域の先頭に
-                書かれるだけで、時間の途中まで下ろすと画面の外へ出てしまい、
-                いま何時のところを見ているのか分からなくなっていた。
-
-                中の数字をもう一段 `sticky` にして、その1時間ぶんの領域の中で
-                下りてくるようにする。上端は局名の行のぶんだけ空ける
-                (高さは実測する。決め打ちだと1pxずれて数字が見出しの裏へ潜る)
+                時刻の列。**横にも縦にも追従させる。** 横は列を `sticky` (`left: 0`) に。1時間を1つのグリッド領域にしているので、
+                数字は中でもう一段 `sticky` にして、時間の途中まで下ろしても領域の中で下りてくるようにする。
+                上端は局名の行のぶんだけ空ける (高さは実測。決め打ちだと1pxずれて数字が見出しの裏へ潜る)
             -->
         {#each hourMarks as mark (mark.at)}
           <div
@@ -1314,15 +1252,7 @@
 
       {#if canCancel}
         <!-- 予約したあと番組表から止められないと、わざわざ予約一覧まで行くことになる -->
-        <form
-          method="POST"
-          action="?/cancel"
-          use:submitting={() =>
-            async ({ result, update }) => {
-              await update();
-              if (result.type === "success") close();
-            }}
-        >
+        <form method="POST" action="?/cancel" use:submitting={closeOnSuccess}>
           <input type="hidden" name="programId" value={program.id} />
           <button
             type="submit"
@@ -1334,18 +1264,9 @@
 
       {#if canWatch}
         <!--
-                    **いま流れている番組は、その場で観られるようにする。**
-                    番組表で見つけた番組を観るのに、ライブ画面へ行って
-                    同じ局を一覧から探し直させるのは遠回り (局が100を超える
-                    環境では、探すほうが手間になる)。
-
-                    **ライブ画面が持っている局にだけ出す** (`watchable`)。
-                    番組表のマスは**名前の無い枠でも出る**ので、そのまま出すと
-                    押した先で別の局が映る (実機の NHKEテレ2/3。分割放送を
-                    していない間のサブチャンネルがこれにあたる)。
-
-                    **リンクにする。** 押した先は別の画面で、そこで選局から
-                    やり直すことになるので、モーダルの中で始めるものではない
+                    **いま流れている番組は、その場で観られるようにする** (ライブ画面で同じ局を探し直させない)。
+                    **ライブ画面が持っている局にだけ出す** (`watchable`)。マスは名前の無い枠でも出るので、そのまま出すと
+                    押した先で別の局が映る (分割放送をしていない間のサブチャンネル)。選局は押した先でやり直すのでリンクにする
                 -->
         <a
           class="button"
@@ -1375,16 +1296,7 @@
                     分からなくなる)。コピー禁止の番組には出さない — 押しても断るだけ
                     (`reservations.reserve`)。理由は詳細の「コピー禁止」に添えてある
                 -->
-        <form
-          method="POST"
-          action="?/reserve"
-          use:submitting={() =>
-            async ({ result, update }) => {
-              await update();
-              // 失敗したときは開いたままにして、中に理由を出す
-              if (result.type === "success") close();
-            }}
-        >
+        <form method="POST" action="?/reserve" use:submitting={closeOnSuccess}>
           <input type="hidden" name="programId" value={program.id} />
           <button type="submit" data-testid="detail-reserve">予約</button>
         </form>
@@ -1395,55 +1307,9 @@
 
 <style>
   /*
-     * **本文の余白 (`--dp-gutter`) を打ち消して、端から端まで使う** (上のコメント)。
-     * 高さも同じぶん足す。広い幅は `FILLED` の `%`、狭い幅は下の `svh`
+     * 外枠と操作の1行の形は `app.css` の `.guide-frame`・`.guide-bar`。
+     * 入りきらないぶんは日付の並びが縮んで横に流れ、時刻は「⋯」へ (下の幅ごとの決まり)
      */
-  .page {
-    --page-h: calc(100% + var(--dp-page-top) + var(--dp-gutter));
-    display: flex;
-    flex-direction: column;
-    margin: calc(-1 * var(--dp-page-top)) calc(-1 * var(--dp-gutter))
-      calc(-1 * var(--dp-gutter));
-    height: var(--page-h);
-  }
-  /*
-     * 狭い幅は画面の高さから上下の固定のもの (ナビ・下のタブ・ノッチ) を引く。
-     * ページごとスクロールさせず、表だけを動かす (表の中と外の二重のスクロールにしない)
-     */
-  @media (max-width: 767px) {
-    .page {
-      /* ナビは 3.5rem (`+layout.svelte` の `.navbar`。下の線は無い)。下のタブは無いので、下の安全域だけ空ける */
-      --page-h: calc(100svh - 3.5rem - env(safe-area-inset-bottom));
-    }
-  }
-  @media (max-width: 639.98px) {
-    .page {
-      --page-h: calc(100svh - env(safe-area-inset-top) - var(--dp-tabbar, 0px));
-    }
-  }
-  /*
-     * **1行に収める** (折り返さない)。入りきらないぶんは日付の並びが縮んで横に流れ、時刻は「⋯」へ (下の幅ごとの決まり)。
-     * 表との間に線は引かない (ヘッダーと同じ。表の頭の局の行が区切りになる)
-     */
-  .toolbar {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: var(--dp-space-2);
-    padding: var(--dp-space-1) var(--dp-space-3);
-  }
-  /* 広い画面では上の余白を画面の頭の余白 (`--dp-page-top`) にし、最初の行 (種別のタブ) をほかの画面とそろえる */
-  @media (min-width: 768px) {
-    .toolbar {
-      padding-top: var(--dp-page-top);
-      padding-bottom: var(--dp-space-2);
-    }
-  }
-  .types {
-    flex: none;
-    width: auto;
-  }
-  /* 種別を選び直すと、選んだ面が横へ滑る (`#lib/motion.svelte.js` の `slide`) */
   .days {
     display: flex;
     flex: 0 1 auto;
@@ -1592,13 +1458,10 @@
      */
   @media (max-width: 767px) {
     .toolbar {
-      order: 1;
       gap: var(--dp-space-1);
-      padding-inline: var(--dp-space-2);
       overflow-x: auto;
       scrollbar-width: none;
     }
-    .types > a.button,
     .days > a.button,
     .date-label {
       padding-inline: 0.4rem;
@@ -1758,19 +1621,6 @@
     transition: translate var(--dp-duration) var(--dp-ease);
   }
   /*
-     * **画面の外のマスは中身を組まない** (`content-visibility: auto`)。
-     *
-     * 288 行 (5 分刻み) × 局数の grid に BS で 2,000 個超の `<button>` を置く。
-     * マスを足すたびに表全体の Layout がやり直しになり、実データ相当 (BS 60 局・
-     * 2,171 マス) で 1 回 450ms × 7 回 = 描き終わりまで 12 秒かかっていた。
-     * 見えている範囲のマスだけ中身を組めば Layout は 11 秒 → 2 秒、描き終わりは
-     * 12 秒 → 3.4 秒 (CPU を 4 倍遅くしても 23 秒 → 10 秒)。
-     *
-     * 大きさは grid の track で決まる (列は `minmax(11rem, 1fr)`、行は 0.75rem) ので、
-     * 中身を組まなくてもマスの場所は変わらない。`contain-intrinsic-size` は
-     * 中身が無いときの仮の大きさで、track に伸ばされるぶんには効かない
-     */
-  /*
      * マスのところの骨組み。列は表と同じ (`subgrid`)。光の筋は `app.css` の `.skeleton`。
      * 時刻の列・局名の行・いまの線は `z-index` を持つので、この上に重なる
      */
@@ -1797,7 +1647,12 @@
     content-visibility: auto;
     contain-intrinsic-size: auto 11rem auto 216rem;
   }
-
+  /*
+     * **画面の外のマスは中身を組まない** (`content-visibility: auto`)。BS 60 局・2,171 マスで、マスを足すたびの
+     * Layout が 1 回 450ms × 7 回かかり、描き終わりまで 12 秒だった (付けて 3.4 秒)。
+     * 大きさは grid の track で決まるので、中身を組まなくてもマスの場所は変わらない
+     * (`contain-intrinsic-size` は中身が無いときの仮の大きさ)
+     */
   .cell {
     overflow: hidden;
     padding: 0.125rem;
@@ -1951,7 +1806,9 @@
     line-clamp: var(--lines);
     overflow: hidden;
   }
-  .title {
+  .title,
+  .state,
+  .desc {
     display: block;
     font-size: 0.75rem;
     line-height: 1.25;
@@ -1963,9 +1820,6 @@
      * **競合は予約済みと同じ青にしない** — 青だと「録れる」に見え、チューナーが足りずに落ちる番組を見落とす
      */
   .state {
-    display: block;
-    font-size: 0.75rem;
-    line-height: 1.25;
     font-weight: var(--dp-weight-bold);
     color: var(--dp-primary-text);
   }
@@ -2006,9 +1860,6 @@
   }
   /* 説明は番組名より一段だけ控える。0.6 まで落とすと淡い下地の上で字が溶けた */
   .desc {
-    display: block;
-    font-size: 0.75rem;
-    line-height: 1.25;
     opacity: 0.8;
   }
   /* 押すものの並び (`.modal-actions`) の中で、1行まるごと使う */

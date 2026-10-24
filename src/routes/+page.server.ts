@@ -175,29 +175,14 @@ export function load({ url, cookies }) {
   const showDeleted = url.searchParams.get("deleted") === "1";
 
   /*
-   * 並びは**放送日時の近い順**で固定する。録画中だけは真っ先に見たいので先頭に置く。
+   * 並びは**放送日時の近い順**で固定し、録画中だけ先頭に置く (「完了した予約も表示」で向きを変えていた頃は、
+   * 押した瞬間に一覧がひっくり返って見ていた行を見失った)。
+   * 録り始めてからの状態は**録画の行から引く** (予約側に書き写していた頃は、録画が失敗しても録画中のまま残った)。
    *
-   * 「完了した予約も表示」で向きを変えていた頃は、押した瞬間に一覧がひっくり返って、
-   * さっきまで見ていた行がどこへ行ったのか分からなくなっていた。
-   * 出るものが増えるだけで、並びは変わらないほうがいい
-   *
-   * 予約が録り始めてからの状態は**録画の行から引く**。予約側に 'recording' /
-   * 'done' / 'failed' を書き写していた頃は、録画が失敗しても予約が録画中のまま
-   * 残ることがあった。持っているのは「録り始めた時刻」だけにしてある
-   */
-  /*
-   * まだ始まっていないものと、いま録っているものだけ。「完了した予約も表示」なら全部。
-   *
-   * **録り逃したもの (`missed`) はここには出さない** — あれは「これから録るもの」
-   * ではなく**録画の結果**なので、録画の一覧のほうに出す (下の `missed`)。
-   * 予約側に出していた頃は、放送が終わった行が予約の列に居座って、
-   * 「これから何が録れるか」の中に過去が混ざっていた。
-   *
-   * **取り消したものは既定では出さない** — 人が押した結果で、驚くことが無い
-   * (「完了した予約も表示」では出す。戻すボタンのため)
-   *
-   * **録画しない (コピー禁止の `skipped`) は放送が終わるまで出す。** 終わったあとも録り逃しには
-   * 移さず (意図して録らなかったものを失敗に見せない)、「完了した予約も表示」で理由ごと見られる
+   * 出すのはまだ始まっていないものと録っているもの (「完了した予約も表示」なら全部)。
+   * - 録り逃し (`missed`) は録画の結果なので、録画の側に出す (下の `missed`)
+   * - 取り消したものは既定では出さない (人が押した結果。「完了した予約も表示」では戻すボタンのため出す)
+   * - 録画しない (コピー禁止の `skipped`) は放送が終わるまで。終わっても録り逃しには移さない (意図して録らなかったものを失敗に見せない)
    */
   const r = alias(reservationTable, "r");
   const rec = alias(recordingTable, "rec");
@@ -242,13 +227,7 @@ export function load({ url, cookies }) {
     // まとめて表示の鍵。予約はシリーズ名を持たないので、番組名から切り出す (録るときと同じ)
     .map((row) => ({ ...row, ...seriesGroup("", row.name) }));
 
-  /*
-   * エンコードは録画の行そのものに出す。
-   *
-   * 別のカードにして一覧の上に積んでいた頃は、エンコードが増えるたびに表が下へ
-   * ずれてページごとスクロールバーが生えていた。同じ番組が2箇所に並んでもいた。
-   * 「録れたものが今どうなっているか」の一形態なので、行の状態として出すのが素直。
-   */
+  // エンコードは録画の行の状態として出す (別のカードにしていた頃は、増えるたびに一覧が下へずれた)
   const res = alias(reservationTable, "res");
   const j = alias(encodeJobs, "j");
   const recordings: RecordingRow[] = orm()
@@ -358,6 +337,12 @@ export function load({ url, cookies }) {
   };
 }
 
+/** フォームの `id`。数でなければ null */
+async function formId(request: Request): Promise<number | null> {
+  const id = Number((await request.formData()).get("id"));
+  return Number.isFinite(id) ? id : null;
+}
+
 export const actions = {
   delete: async ({ request }) => {
     const recording = recordingFromForm(await request.formData());
@@ -413,10 +398,8 @@ export const actions = {
   },
 
   cancelEncode: async ({ request }) => {
-    const form = await request.formData();
-    const id = Number(form.get("id"));
-    if (!Number.isFinite(id))
-      return fail(400, { message: "ジョブIDが不正です" });
+    const id = await formId(request);
+    if (id === null) return fail(400, { message: "ジョブIDが不正です" });
     // 畳み終わってから返る。ここで待たないと、この直後の読み直しが
     // まだ「エンコード中」を読んで、押しても何も変わらないように見える
     await cancelEncode(id);
@@ -464,9 +447,8 @@ export const actions = {
    * 失敗した録画と同じで、確かめ終わったら畳みたい
    */
   deleteMissed: async ({ request }) => {
-    const form = await request.formData();
-    const id = Number(form.get("id"));
-    if (!Number.isFinite(id)) return fail(400, { message: "IDが不正です" });
+    const id = await formId(request);
+    if (id === null) return fail(400, { message: "IDが不正です" });
     // 状態も見て消す。録り逃し以外 (これからの予約など) を同じアクションで消させない
     const gone = orm()
       .delete(reservationTable)
@@ -487,9 +469,8 @@ export const actions = {
 
   /** 取り消した予約を戻す。ルールは作り直さないので、ここからしか戻せない */
   restore: async ({ request }) => {
-    const form = await request.formData();
-    const id = Number(form.get("id"));
-    if (!Number.isFinite(id)) return fail(400, { message: "IDが不正です" });
+    const id = await formId(request);
+    if (id === null) return fail(400, { message: "IDが不正です" });
     try {
       await restore(id);
     } catch (error) {
@@ -501,9 +482,8 @@ export const actions = {
   },
 
   cancel: async ({ request }) => {
-    const form = await request.formData();
-    const id = Number(form.get("id"));
-    if (!Number.isFinite(id)) return fail(400, { message: "予約IDが不正です" });
+    const id = await formId(request);
+    if (id === null) return fail(400, { message: "予約IDが不正です" });
     await cancel(id);
     return { success: true };
   },
