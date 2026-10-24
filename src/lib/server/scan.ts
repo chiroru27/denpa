@@ -24,6 +24,7 @@ import { config } from "./config";
 import { savePrograms, settle, sync } from "./epg";
 import { collectOnce } from "./epg-collect";
 import { emit } from "./events";
+import { resolveConflicts } from "./scheduler";
 import {
   type AgentChannel,
   getTuners,
@@ -110,11 +111,14 @@ export async function readServices(
   let bytes = 0;
   let message = "";
 
+  // 打ち切りの合図は走査全体で1つ。局ごとに足した見張りは、読み終えたら外す (100局を超えると積もる)
+  let stop = (): void => {};
   const deadline = new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, timeout);
-    timer.unref?.();
-    abort?.addEventListener("abort", () => resolve(), { once: true });
+    stop = resolve;
   });
+  const timer = setTimeout(stop, timeout);
+  timer.unref?.();
+  abort?.addEventListener("abort", stop, { once: true });
 
   const read = (async () => {
     for (;;) {
@@ -130,6 +134,8 @@ export async function readServices(
   });
 
   await Promise.race([read, deadline]);
+  clearTimeout(timer);
+  abort?.removeEventListener("abort", stop);
   await source.cancel().catch(() => undefined);
 
   const signal = bytes > 0;
@@ -504,7 +510,11 @@ async function runScan(targets: [ScannableType, string[]][]): Promise<void> {
     if (scanner.events.length > 0) {
       try {
         const saved = savePrograms(scanner.events);
-        if (saved > 0) settle(saved);
+        if (saved > 0) {
+          settle(saved);
+          // 立った予約の取り合いを裁き直す (`settle` は裁かない。ほかの呼び手と同じ)
+          await resolveConflicts();
+        }
       } catch (error) {
         console.warn(
           `[scan] スキャン中に拾った番組表を書けませんでした: ${error}`,
