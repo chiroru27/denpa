@@ -506,6 +506,8 @@
 @media (min-width: 640px) {
   .board {
     --t-bar-h: 3.25rem;
+    /* 浮いたヘッダー・頭の1行とのあいだは、操作の1行どうしと同じ隙間 (`--dp-bar-gap`) */
+    --t-day-gap: var(--dp-bar-gap);
   }
   .board .t-toolbar {
     top: calc(var(--dp-header-bottom) + var(--dp-bar-gap));
