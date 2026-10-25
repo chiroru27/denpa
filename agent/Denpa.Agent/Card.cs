@@ -307,13 +307,20 @@ public static class Scramble
         var target = Inside(recorded, output);
         if (source is null || target is null) return Failed("元のTSの保存先の外にあるファイルは復号できません");
         if (!File.Exists(source)) return Failed($"{source} が見つかりません。denpa と同じ保存先をこのコンテナにもマウントしてください");
+        // 書き出す先は新しく作る。もうあるファイルは上書きしない (置き場の中の録画を潰させない)
+        if (File.Exists(target)) return Failed($"{target} はもうあります。上書きはしません");
 
+        // 自分で作ったか。駄目だったときに消すのは自分で作った書きかけだけ (掛け直しが「もうあります」で断られないように)
+        var created = false;
         try
         {
             var b25 = new Descrambler(Keys.Source);
-            using var reading = File.OpenRead(source);
-            using var writing = File.Create(target);
-            b25.DecodeAll(reading, writing);
+            using (var reading = File.OpenRead(source))
+            using (var writing = new FileStream(target, FileMode.CreateNew, FileAccess.Write))
+            {
+                created = true;
+                b25.DecodeAll(reading, writing);
+            }
 
             /*
              * **復号できなかったのに成功とは言わない。** カードが無い・ECM が流れていない
@@ -321,11 +328,23 @@ public static class Scramble
              */
             if (b25.Undecodable * 100 > b25.Decoded)
             {
+                File.Delete(target);
                 return Failed($"{b25.Undecodable} パケットがスクランブルのままです ({b25.LastError ?? "鍵を受け取れませんでした"})");
             }
         }
         catch (Exception error)
         {
+            if (created)
+            {
+                try
+                {
+                    File.Delete(target);
+                }
+                catch (Exception)
+                {
+                    // 消せなくても、理由は元のほうを返す
+                }
+            }
             return Failed(error.Message);
         }
         return new JsonObject { ["ok"] = true, ["error"] = "" };
