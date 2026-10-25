@@ -204,7 +204,15 @@ public sealed partial class PcscLink : ICardLink
 
     public byte[] Reset()
     {
-        // 繋ぐだけで電源が入る。**呼ばれるのは開いた直後の1回だけ** — BCas は失敗したら閉じて開き直す
+        /*
+         * 繋ぐだけで電源が入る。**呼ばれるのは開いた直後の1回だけ** — BCas は失敗したら閉じて開き直す。
+         *
+         * macOS の標準の CCID ドライバ (Apple のもの) では B-CAS に繋がらないリーダーがある (IDBridge CT30 の報告)。
+         * 怪しいのは速さ — B-CAS は specific mode で ATR の直後から TA1 の速さで話し、PC Twin の系統のリーダーは
+         * それをドライバに設定してもらう必要がある (Ccid.cs の Reset と SetT1Parameters)。速さは PC/SC からは
+         * 変えられない (SCardControl も Apple のドライバは受けない) ので、ここでは手を打たず、失敗したら
+         * ドライバを切り替える案内を出す (Check。docs/install-mac.md「カードが読めないとき」)
+         */
         Check(Connect(_context, Name, out _card), Name, "カードリーダーに接続できません");
 
         var atr = new byte[36];
@@ -229,34 +237,59 @@ public sealed partial class PcscLink : ICardLink
         Release(_context);
     }
 
-    /// <summary>失敗なら投げる。**カードが挿さっていないだけなら <see cref="CardAbsentException"/>** (画面では「カードなし」)</summary>
+    /// <summary>
+    /// 失敗なら投げる。**カードが挿さっていないだけなら <see cref="CardAbsentException"/>** (画面では「カードなし」)。
+    /// macOS でカードと話せなかったときは、ドライバを切り替える案内を足す (docs/install-mac.md「カードが読めないとき」)
+    /// </summary>
     private static void Check(int result, string name, string what)
     {
         if (result == 0) return;
-        var message = $"{name}: {what} (PC/SC 0x{result:x8}{Explain(result)})";
-        throw unchecked((uint)result) is NoSmartcard or RemovedCard ? new CardAbsentException(message) : new IOException(message);
+        var code = unchecked((uint)result);
+        var hint = OperatingSystem.IsMacOS() && code is not (NoSmartcard or RemovedCard or SharingViolation)
+            ? "。macOS の標準の CCID ドライバで読めないリーダーがあります。docs/install-mac.md の「カードが読めないとき」を見てください"
+            : "";
+        var message = $"{name}: {what} (PC/SC 0x{result:x8}{Explain(result)}){hint}";
+        throw code is NoSmartcard or RemovedCard ? new CardAbsentException(message) : new IOException(message);
     }
 
+    private const uint SharingViolation = 0x8010000B;
     private const uint NoSmartcard = 0x8010000C;
     private const uint RemovedCard = 0x80100069;
 
     /// <summary>よく出るものだけ言葉にする (pcsc-lite の pcsclite.h と同じ番号。Windows の winerror.h も同じ)</summary>
     private static string Explain(int result) => unchecked((uint)result) switch
     {
-        0x8010000B => ": 他のアプリが使用中です",
+        SharingViolation => ": 他のアプリが使用中です",
         NoSmartcard or RemovedCard => ": カードが挿さっていません",
+        0x8010000F => ": カードと方式が合いません",
+        0x80100013 => ": カードリーダーとの通信に失敗しました",
         0x8010001D => ": PC/SC が動いていません",
         0x8010002E => ": リーダーが見つかりません",
         0x80100066 => ": カードが応答しません",
+        0x80100067 => ": カードに電源が入りません",
         _ => "",
     };
 
-    /// <summary>診断用 (<c>denpa-agent --card</c>)。見えているリーダーを並べる</summary>
+    /// <summary>診断用 (<c>denpa-agent --card</c>)。見えているリーダーと、macOS ならどちらの CCID ドライバか</summary>
     public static string Describe()
     {
         var readers = Readers();
-        return readers.Count == 0
+        var list = readers.Count == 0
             ? "PC/SC のカードリーダーが見つかりません (USB のカードリーダーが挿さっていないか、OS が認識していません)"
             : string.Join('\n', readers.Select(name => $"PC/SC {name}"));
+        return OperatingSystem.IsMacOS() ? $"{list}\n{MacDriver()}" : list;
+    }
+
+    /// <summary>
+    /// macOS の CCID ドライバ。`useIFDCCID` が 1 なら従来の ifd-ccid、無いか 0 なら Apple の標準のもの
+    /// (docs/install-mac.md「カードが読めないとき」)
+    /// </summary>
+    private static string MacDriver()
+    {
+        var (code, output) = Shell.Run(
+            "defaults", ["read", "/Library/Preferences/com.apple.security.smartcard", "useIFDCCID"], TimeSpan.FromSeconds(5));
+        return code == 0 && output.Trim() == "1"
+            ? "CCID ドライバ: 従来のもの (useIFDCCID)"
+            : "CCID ドライバ: macOS の標準のもの";
     }
 }
