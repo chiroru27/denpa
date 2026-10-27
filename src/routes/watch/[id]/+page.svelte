@@ -1130,7 +1130,7 @@
   function resume(): void {
     length = video?.duration ?? 0;
     place();
-    // 繋ぎが切れて読み直したところ。観ていた位置へ戻して続ける (`recover`)
+    // 接続が切れて読み直したところ。観ていた位置へ戻して続ける (`recover`)
     if (retryAt > 0 && video !== null) {
       video.currentTime = retryAt;
       retryAt = 0;
@@ -1285,7 +1285,7 @@
 
   /**
    * 配信が切れたら (サーバの入れ替えなど) 同じ所から読み直し、切れた瞬間の位置へ戻す。
-   * 繋ぎ直すのは繋ぎが切れたときだけ — 読めない形式・壊れたファイルは何度やっても同じなので `broken`
+   * 繋ぎ直すのは接続が切れたときだけ — 読めない形式・壊れたファイルは何度やっても同じなので `broken`
    */
   function recover(): void {
     if (video === null) return;

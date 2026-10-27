@@ -69,7 +69,7 @@ const PENDING_MOST = 8 * CLOCK;
 const BEHIND_MOST = 0.5 * CLOCK;
 /** 1コマの長さの目安 (90kHz)。29.97 コマ。実際の間隔が分かればそれを使う */
 const FRAME = 3003;
-/** 音の復号が続けて転んだら諦める回数 */
+/** 音のデコードが続けて失敗したら諦める回数 */
 const AUDIO_ERRORS_MOST = 20;
 /**
  * 録画 (`follow`) で圧縮のまま持っておく上限。**時間 (90kHz) とバイト数の小さいほう。** 読む側
