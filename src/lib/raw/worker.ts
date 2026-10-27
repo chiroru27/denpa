@@ -949,7 +949,13 @@ scope.onmessage = (event: MessageEvent<ToWorker>) => {
       vsync.feed(message.at);
       break;
     case "reset":
-      reset(message.from ?? null);
+      try {
+        reset(message.from ?? null);
+      } finally {
+        // ここより前に出した音は前の局のもの。画面はこの返事まで捨てる (`engine.ts` の `resetting`)。
+        // 転んでも返す — 返さないと、画面はこのあとの音をずっと捨て続ける
+        post({ type: "reset" });
+      }
       break;
     case "end":
       // 尻まで読んだ。デコーダを読み終えるまでは溜めたぶんの後ろで (`early`)
