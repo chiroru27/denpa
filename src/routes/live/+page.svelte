@@ -234,6 +234,7 @@
   /** バックグラウンド再生。戻ったら、張り付いていたなら放送の今へ (止めた所からではなく) */
   let wasLive = false;
   const background = backgroundPlayback({
+    nativeVideo: () => (player.canvas ? null : video),
     pip: () => pip.active,
     paused: () => player.paused,
     pause: () => {
