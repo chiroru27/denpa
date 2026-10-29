@@ -226,6 +226,7 @@
 
   /** バックグラウンド再生 (`background.svelte.ts`)。既定はオフで、裏に回ったら止め、戻ったら止めた所から */
   const background = backgroundPlayback({
+    nativeVideo: () => (player.canvas ? null : video),
     pip: () => pip.active,
     paused: () => player.paused,
     pause: () => player.toggle(),

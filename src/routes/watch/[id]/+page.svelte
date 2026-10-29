@@ -991,6 +991,7 @@
 
   /** バックグラウンド再生 ([background.svelte.ts](../../../lib/components/player/background.svelte.ts)) */
   const background = backgroundPlayback({
+    nativeVideo: () => (drawing ? null : video),
     pip: () => pip.active,
     paused: mediaPaused,
     pause: pauseMedia,
