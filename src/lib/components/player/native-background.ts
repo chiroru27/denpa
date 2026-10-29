@@ -1,184 +1,148 @@
-/** Bounded recovery for native video paused around iOS backgrounding.
- * This never loops, never resumes an explicit media-control pause, and never
- * requests playback just because a source is buffering.
+/**
+ * **iOS でホーム画面へ戻ると止められる `<video>` を、1 回だけ再生し直す** (`background.svelte.ts` のオンのとき)。
+ *
+ * iOS 27 の Safari とホーム画面の Web アプリでは、バックグラウンド再生をオンにしていても、隠れる直前に
+ * `<video>` が止められる (ページからは pause を呼んでいない。#1681)。音つきなら、そこで play() すれば続く。
+ *
+ * - 隠れる 300ms 前から隠れて 1.5 秒の間に止められたものだけ。1 回だけで、断られても繰り返さない
+ * - ページのボタンとロック画面 (MediaSession) で止めたものは戻さない。MediaSession を使えない端末では、
+ *   外から止められたのと見分けられないので戻さない
+ * - 音を消している・終わった・中身がまだ無い・ほかの音に割り込まれている (`audioSession`) ときも戻さない
  */
-export interface NativeBackgroundVideo extends EventTarget {
+export interface NativeVideo extends EventTarget {
   readonly paused: boolean;
   readonly ended: boolean;
   readonly muted: boolean;
   readonly readyState: number;
   play(): Promise<void>;
 }
-export interface NativeMediaActions {
+
+export interface MediaActions {
   setActionHandler(
     action: "play" | "pause",
     handler: (() => void) | null,
   ): void;
 }
+
 interface Options {
-  video: NativeBackgroundVideo;
+  video: NativeVideo;
   page: EventTarget;
   visibility: EventTarget & { readonly visibilityState: string };
-  media: NativeMediaActions | undefined;
+  /** ロック画面などの操作 (`navigator.mediaSession`)。無い端末は undefined */
+  media: MediaActions | undefined;
+  /** オンで、小窓を出していないか */
   enabled: () => boolean;
+  /** ページのボタンで止めているか */
   userPaused: () => boolean;
   pause: () => void;
   resume: () => void;
   interrupted: () => boolean;
   now: () => number;
-  report?: (event: string) => void;
 }
-const owners = new WeakMap<NativeMediaActions, object>();
+
 const BEFORE_HIDE = 300;
 const AFTER_HIDE = 1500;
 
+/** 見張りを始める。返す関数で止める */
 export function nativeBackgroundRecovery(options: Options): () => void {
   const { video, page, visibility, media } = options;
-  const token = {};
-  let closed = false;
-  let controls = false;
-  let remotePause = false;
-  let gone = false;
   let hidden = visibility.visibilityState === "hidden";
-  let wasPlaying = !video.paused && !video.ended;
-  let pauseAt = -Infinity;
-  let recentlyPlaying = false;
+  let gone = false;
+  /** 最後に再生していた時刻。再生中は Infinity */
+  let playedAt = video.paused ? -Infinity : Infinity;
+  /** ここまでに止められたら戻す。戻したら (1 回きり) と、見えたら -Infinity */
   let until = -Infinity;
-  let tried = false;
-  const removers: Array<() => void> = [];
-  const report = (event: string) => {
-    if (!closed) options.report?.(event);
-  };
+  let remotePause = false;
+  let controls = false;
 
-  function willing(): boolean {
-    return (
-      !closed &&
-      !gone &&
-      controls &&
-      options.enabled() &&
-      !options.userPaused() &&
-      !remotePause &&
-      !options.interrupted() &&
-      !video.ended &&
-      !video.muted &&
-      video.readyState >= 2
-    );
-  }
-  function requestPlay(reason: string): void {
-    report(reason);
-    try {
-      void video.play().then(
-        () => report("background-resume-resolved"),
-        (error: unknown) =>
-          report(
-            "background-resume-rejected:" +
-              (error instanceof Error ? error.name : "unknown").slice(0, 40),
-          ),
-      );
-    } catch {
-      report("background-resume-threw");
-    }
-  }
+  const play = () => void video.play().catch(() => {});
+
   function recover(): void {
-    if (
-      !hidden ||
-      tried ||
-      options.now() > until ||
-      !video.paused ||
-      !willing()
-    )
-      return;
-    tried = true; // Set before play(), including synchronous play/pause events.
-    requestPlay("background-resume-attempt");
-  }
-  function playing(): void {
-    wasPlaying = true;
-    remotePause = false;
-    recentlyPlaying = false;
-  }
-  function paused(): void {
-    recentlyPlaying = wasPlaying && !options.userPaused() && !remotePause;
-    pauseAt = options.now();
-    wasPlaying = false;
-    recover();
-  }
-  function changed(): void {
-    const next = visibility.visibilityState === "hidden";
-    if (next && !hidden) {
-      const recent = recentlyPlaying && options.now() - pauseAt <= BEFORE_HIDE;
-      until = wasPlaying || recent ? options.now() + AFTER_HIDE : -Infinity;
-      tried = false;
-    } else if (!next) {
-      until = -Infinity;
-      gone = false;
-    }
-    hidden = next;
-    recover();
-  }
-  function listen(
-    target: EventTarget,
-    event: string,
-    handler: () => void,
-  ): void {
-    target.addEventListener(event, handler);
-    removers.push(() => target.removeEventListener(event, handler));
-  }
-  listen(video, "play", playing);
-  listen(video, "playing", playing);
-  listen(video, "pause", paused);
-  listen(video, "ended", () => {
-    wasPlaying = false;
+    if (!hidden || !video.paused || options.now() > until) return;
+    if (!controls || gone || remotePause || !options.enabled()) return;
+    if (options.userPaused() || options.interrupted()) return;
+    if (video.ended || video.muted || video.readyState < 2) return;
+    // play() の中で pause が来ても繰り返さないよう、先に閉じる
     until = -Infinity;
-  });
-  listen(visibility, "visibilitychange", changed);
-  listen(page, "pagehide", () => {
-    gone = true;
-    until = -Infinity;
-  });
-  listen(page, "pageshow", () => {
-    gone = false;
-    changed();
-  });
+    play();
+  }
 
-  if (media !== undefined) {
-    try {
-      media.setActionHandler("pause", () => {
-        remotePause = true;
-        until = -Infinity;
-        report("media-control-pause");
-        if (!options.userPaused()) options.pause();
-      });
-      media.setActionHandler("play", () => {
+  const listeners: [EventTarget, string, () => void][] = [
+    [
+      video,
+      "playing",
+      () => {
+        playedAt = Infinity;
         remotePause = false;
-        report("media-control-play");
-        if (options.userPaused()) options.resume();
-        else requestPlay("media-control-native-play");
-      });
-      owners.set(media, token);
-      controls = true;
-    } catch {
-      // Do not auto-resume if an explicit external stop cannot be distinguished.
-      try {
-        media.setActionHandler("pause", null);
-        media.setActionHandler("play", null);
-      } catch {
-        /* unsupported */
-      }
-      report("media-controls-unavailable");
-    }
+      },
+    ],
+    [
+      video,
+      "pause",
+      () => {
+        if (playedAt === Infinity) playedAt = options.now();
+        recover();
+      },
+    ],
+    [
+      video,
+      "ended",
+      () => {
+        playedAt = -Infinity;
+        until = -Infinity;
+      },
+    ],
+    [
+      visibility,
+      "visibilitychange",
+      () => {
+        const next = visibility.visibilityState === "hidden";
+        if (next && !hidden) {
+          const now = options.now();
+          until = now - playedAt <= BEFORE_HIDE ? now + AFTER_HIDE : -Infinity;
+        } else if (!next) until = -Infinity;
+        hidden = next;
+        recover();
+      },
+    ],
+    [
+      page,
+      "pagehide",
+      () => {
+        gone = true;
+        until = -Infinity;
+      },
+    ],
+    [page, "pageshow", () => (gone = false)],
+  ];
+  for (const [target, event, handler] of listeners)
+    target.addEventListener(event, handler);
+
+  try {
+    media?.setActionHandler("pause", () => {
+      remotePause = true;
+      until = -Infinity;
+      if (!options.userPaused()) options.pause();
+    });
+    media?.setActionHandler("play", () => {
+      remotePause = false;
+      if (options.userPaused()) options.resume();
+      else play();
+    });
+    controls = media !== undefined;
+  } catch {
+    // 受け付けない端末。外から止めたのと見分けられないので、戻さない (controls のまま false)
   }
+
   return () => {
-    closed = true;
     until = -Infinity;
-    for (const remove of removers) remove();
-    if (media !== undefined && owners.get(media) === token) {
-      owners.delete(media);
-      try {
-        media.setActionHandler("pause", null);
-        media.setActionHandler("play", null);
-      } catch {
-        /* unsupported */
-      }
+    for (const [target, event, handler] of listeners)
+      target.removeEventListener(event, handler);
+    try {
+      media?.setActionHandler("pause", null);
+      media?.setActionHandler("play", null);
+    } catch {
+      // 受け付けない端末
     }
   };
 }

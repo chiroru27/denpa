@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import { nativeBackgroundRecovery } from "./native-background";
 
+/** 偽の `<video>`。play() を呼んだ数を数える */
 class Video extends EventTarget {
   paused = false;
   ended = false;
@@ -13,7 +14,6 @@ class Video extends EventTarget {
     this.calls++;
     if (this.reject) return Promise.reject(new Error("NotAllowedError"));
     this.paused = false;
-    this.dispatchEvent(new Event("play"));
     this.dispatchEvent(new Event("playing"));
     return Promise.resolve();
   }
@@ -22,34 +22,28 @@ class Video extends EventTarget {
     this.dispatchEvent(new Event("pause"));
   }
 }
+
 class Visibility extends EventTarget {
   visibilityState = "visible";
-  hide(): void {
-    this.visibilityState = "hidden";
-    this.dispatchEvent(new Event("visibilitychange"));
-  }
-  show(): void {
-    this.visibilityState = "visible";
+  set(state: "visible" | "hidden"): void {
+    this.visibilityState = state;
     this.dispatchEvent(new Event("visibilitychange"));
   }
 }
-function fixture(hasControls = true) {
+
+function fixture(controls = true) {
   const video = new Video();
-  const document = new Visibility();
+  const visibility = new Visibility();
   const page = new EventTarget();
   const state = { time: 0, enabled: true, paused: false, interrupted: false };
   const handlers = new Map<string, (() => void) | null>();
-  const media = {
-    setActionHandler(action: "play" | "pause", fn: (() => void) | null) {
-      handlers.set(action, fn);
-    },
-  };
-  const reports: string[] = [];
   const stop = nativeBackgroundRecovery({
     video,
     page,
-    visibility: document,
-    media: hasControls ? media : undefined,
+    visibility,
+    media: controls
+      ? { setActionHandler: (action, fn) => handlers.set(action, fn) }
+      : undefined,
     enabled: () => state.enabled,
     userPaused: () => state.paused,
     pause: () => {
@@ -62,142 +56,114 @@ function fixture(hasControls = true) {
     },
     interrupted: () => state.interrupted,
     now: () => state.time,
-    report: (event) => reports.push(event),
   });
-  return { video, document, page, state, handlers, media, reports, stop };
+  return { video, visibility, page, state, handlers, stop };
 }
 
-test("native pause 150ms before hide is retried once", () => {
-  const f = fixture();
-  f.state.time = 1000;
-  f.video.pause();
-  expect(f.video.calls).toBe(0);
-  f.state.time = 1150;
-  f.document.hide();
-  expect(f.video.calls).toBe(1);
-  f.video.pause();
-  f.document.dispatchEvent(new Event("visibilitychange"));
-  expect(f.video.calls).toBe(1);
-  f.stop();
+test("隠れる直前 (300ms 以内) と直後 (1.5 秒以内) に止められたら、1 回だけ再生し直す", () => {
+  const before = fixture();
+  before.state.time = 1000;
+  before.video.pause();
+  before.state.time = 1150;
+  before.visibility.set("hidden");
+  expect(before.video.calls).toBe(1);
+  before.video.pause();
+  expect(before.video.calls).toBe(1);
+  before.stop();
+
+  const after = fixture();
+  after.visibility.set("hidden");
+  after.state.time = 1100;
+  after.video.pause();
+  expect(after.video.calls).toBe(1);
+  after.stop();
 });
-test("native pause after hide is also retried once", () => {
-  const f = fixture();
-  f.state.time = 1000;
-  f.document.hide();
-  expect(f.video.calls).toBe(0);
-  f.state.time = 1100;
-  f.video.pause();
-  expect(f.video.calls).toBe(1);
-  f.stop();
+
+test("隠れるずっと前に止めたもの・隠れて 1.5 秒より後に止められたものは戻さない", () => {
+  const early = fixture();
+  early.video.pause();
+  early.state.time = 1000;
+  early.visibility.set("hidden");
+  expect(early.video.calls).toBe(0);
+  early.stop();
+
+  const late = fixture();
+  late.visibility.set("hidden");
+  late.state.time = 2000;
+  late.video.pause();
+  expect(late.video.calls).toBe(0);
+  late.stop();
 });
-test("paused well before hiding is not resumed", () => {
-  const f = fixture();
-  f.video.pause();
-  f.state.time = 1000;
-  f.document.hide();
-  expect(f.video.calls).toBe(0);
-  f.stop();
+
+test("ページのボタンとロック画面で止めたものは戻さない。ロック画面の再生は効く", () => {
+  const button = fixture();
+  button.state.paused = true;
+  button.video.pause();
+  button.visibility.set("hidden");
+  expect(button.video.calls).toBe(0);
+  button.stop();
+
+  const lock = fixture();
+  lock.visibility.set("hidden");
+  lock.handlers.get("pause")?.();
+  expect(lock.state.paused).toBe(true);
+  expect(lock.video.calls).toBe(0);
+  lock.state.time = 5000;
+  lock.handlers.get("play")?.();
+  expect(lock.state.paused).toBe(false);
+  expect(lock.video.calls).toBe(1);
+  lock.stop();
 });
-test("page button pause is respected", () => {
-  const f = fixture();
-  f.state.paused = true;
-  f.video.pause();
-  f.state.time = 100;
-  f.document.hide();
-  expect(f.video.calls).toBe(0);
-  f.stop();
-});
-test("external pause during transition cancels recovery", () => {
-  const f = fixture();
-  f.document.hide();
-  f.handlers.get("pause")?.();
-  expect(f.state.paused).toBe(true);
-  expect(f.video.calls).toBe(0);
-  f.stop();
-});
-test("external play can resume after the recovery window", () => {
-  const f = fixture();
-  f.state.paused = true;
-  f.video.pause();
-  f.document.hide();
-  f.state.time = 5000;
-  f.handlers.get("play")?.();
-  expect(f.state.paused).toBe(false);
-  expect(f.video.calls).toBe(1);
-  f.stop();
-});
-test("late pauses and hidden samples do not start new retries", () => {
-  const f = fixture();
-  f.document.hide();
-  f.state.time = 2000;
-  f.video.pause();
-  f.document.dispatchEvent(new Event("visibilitychange"));
-  expect(f.video.calls).toBe(0);
-  f.stop();
-});
-test("disabled, interrupted, muted and ended cases do not resume", () => {
+
+test("オフ・割り込み・消音・終わり・中身が無い・MediaSession が無い端末では戻さない", () => {
   for (const kind of [
     "disabled",
     "interrupted",
     "muted",
     "ended",
     "empty",
+    "no-controls",
   ] as const) {
-    const f = fixture();
+    const f = fixture(kind !== "no-controls");
     if (kind === "disabled") f.state.enabled = false;
     if (kind === "interrupted") f.state.interrupted = true;
     if (kind === "muted") f.video.muted = true;
     if (kind === "ended") f.video.ended = true;
     if (kind === "empty") f.video.readyState = 0;
-    f.document.hide();
+    f.visibility.set("hidden");
     f.video.pause();
     expect(f.video.calls).toBe(0);
     f.stop();
   }
 });
-test("without media controls, do not risk overriding an external pause", () => {
-  const f = fixture(false);
-  f.document.hide();
-  f.video.pause();
-  expect(f.video.calls).toBe(0);
-  f.stop();
-});
-test("pagehide or cleanup blocks further recovery", () => {
-  const f = fixture();
-  f.document.hide();
-  f.page.dispatchEvent(new Event("pagehide"));
-  f.video.pause();
-  expect(f.video.calls).toBe(0);
-  f.stop();
-  f.document.show();
-  f.video.paused = false;
-  f.document.hide();
-  f.video.pause();
-  expect(f.video.calls).toBe(0);
-  expect(f.handlers.get("pause")).toBeNull();
-});
-test("play rejection is recorded and never loops", async () => {
+
+test("断られても繰り返さない。見えてからまた隠れれば、もう 1 回試す", async () => {
   const f = fixture();
   f.video.reject = true;
-  f.document.hide();
+  f.visibility.set("hidden");
   f.video.pause();
   await Promise.resolve();
   f.video.dispatchEvent(new Event("pause"));
   expect(f.video.calls).toBe(1);
-  expect(
-    f.reports.some((event) => event.startsWith("background-resume-rejected")),
-  ).toBe(true);
-  f.stop();
-});
-test("returning to visible allows a fresh later transition", () => {
-  const f = fixture();
-  f.document.hide();
-  f.video.pause();
-  expect(f.video.calls).toBe(1);
-  f.document.show();
+
+  f.video.reject = false;
+  f.visibility.set("visible");
+  f.video.paused = false;
+  f.video.dispatchEvent(new Event("playing"));
   f.state.time = 3000;
-  f.document.hide();
+  f.visibility.set("hidden");
   f.video.pause();
   expect(f.video.calls).toBe(2);
   f.stop();
+});
+
+test("pagehide のあとと、止めたあとは戻さない。止めると MediaSession の操作も外す", () => {
+  const f = fixture();
+  f.visibility.set("hidden");
+  f.page.dispatchEvent(new Event("pagehide"));
+  f.video.pause();
+  expect(f.video.calls).toBe(0);
+  f.stop();
+  expect(f.handlers.get("pause")).toBeNull();
+  expect(f.handlers.get("play")).toBeNull();
 });

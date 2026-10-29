@@ -30,8 +30,8 @@ import { nativeBackgroundRecovery } from "./native-background";
  * 聴きたいが、居間のテレビでは要らない、のように端末で変わる
  */
 interface Options {
-  /** Native video only; return null for canvas/compatibility mode. */
-  nativeVideo?: () => HTMLVideoElement | null;
+  /** `<video>` で観ているときの要素。canvas に描いているときは null (iOS で止められたら戻す: `native-background.ts`) */
+  nativeVideo: () => HTMLVideoElement | null;
   /** 押して開いた小窓を出しているか (`pip.active`) */
   pip: () => boolean;
   /** 止めているか */
@@ -95,17 +95,17 @@ export function backgroundPlayback(options: Options): Background {
     };
   });
 
+  // オンで `<video>` で観ている間、iOS がホーム画面へ戻るときに止めたら 1 回だけ戻す
   $effect(() => {
-    const video = options.nativeVideo?.();
-    if (!on || video === null || video === undefined) return;
+    const video = options.nativeVideo();
+    if (!on || video === null) return;
     return untrack(() =>
       nativeBackgroundRecovery({
         video,
         page: window,
         visibility: document,
         media: navigator.mediaSession,
-        enabled: () =>
-          on && !options.pip() && options.nativeVideo?.() === video,
+        enabled: () => on && !options.pip() && options.nativeVideo() === video,
         userPaused: options.paused,
         pause: options.pause,
         resume: options.resume,
