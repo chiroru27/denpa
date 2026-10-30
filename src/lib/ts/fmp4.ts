@@ -116,6 +116,8 @@ export interface Fmp4Track {
   config: Uint8Array<ArrayBuffer>;
   width: number;
   height: number;
+  /** paspの画素比率。無ければデコーダーの表示寸法へ任せる。 */
+  pixelAspect?: { horizontal: number; vertical: number };
   /** 音声のチャンネル数と標本化周波数 (sample entry に書いてある値) */
   channels: number;
   sampleRate: number;
@@ -246,7 +248,18 @@ function readEntry(
     // VisualSampleEntry: 中身の頭から 78 バイトが決まった並び (幅は 24、高さは 26)
     if (body.length < 78) return null;
     const inner = body.subarray(78);
-    const size = { width: v.getUint16(24), height: v.getUint16(26) };
+    const pasp = child(inner, "pasp");
+    const horizontal =
+      pasp !== null && pasp.length >= 8 ? view(pasp).getUint32(0) : 0;
+    const vertical =
+      pasp !== null && pasp.length >= 8 ? view(pasp).getUint32(4) : 0;
+    const size = {
+      width: v.getUint16(24),
+      height: v.getUint16(26),
+      ...(horizontal > 0 && vertical > 0
+        ? { pixelAspect: { horizontal, vertical } }
+        : {}),
+    };
     if (entry.type === "avc1") {
       const avcC = child(inner, "avcC");
       if (avcC === null || avcC.length < 4) return null;

@@ -37,6 +37,7 @@ import {
 
 import { downscale } from "./downscale";
 import type { GrabSize } from "./messages";
+import { mp4DisplaySize } from "./video-display";
 
 /** 番のこれだけ前からデコードする (90kHz) */
 const AHEAD = 0.3 * CLOCK;
@@ -216,7 +217,14 @@ export class Fmp4Video {
     }
     this.video = video;
     if (video === null) return;
+    const display = mp4DisplaySize(video);
     this.config = {
+      ...(display === null
+        ? {}
+        : {
+            displayAspectWidth: display.width,
+            displayAspectHeight: display.height,
+          }),
       codec: video.codec,
       description: video.config,
       codedWidth: video.width,
@@ -428,10 +436,11 @@ export class Fmp4Video {
       this.draw(this.frames.shift() as VideoFrame);
   }
 
-  /** 1コマ描いて閉じる。**大きさはフレームに合わせる** (見せる大きさ。縦横比はフレームが持っている) */
+  /** MP4の表示比率がある場合は明示的に反映する。Safariが返す寸法に依存しない。 */
   private draw(frame: VideoFrame): void {
-    const width = frame.displayWidth;
-    const height = frame.displayHeight;
+    const display = mp4DisplaySize(this.video);
+    const width = display?.width ?? frame.displayWidth;
+    const height = display?.height ?? frame.displayHeight;
     if (this.canvas.width !== width || this.canvas.height !== height) {
       this.canvas.width = width;
       this.canvas.height = height;

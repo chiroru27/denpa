@@ -445,3 +445,42 @@ describe("ffmpeg が書いた fMP4 を読む", () => {
     });
   }
 });
+
+describe("MP4の画素比率を維持する", () => {
+  test("H.264とAV1のpaspを読み、画素数と表示比率を分けて持つ", () => {
+    for (const codec of ["avc1", "av01"]) {
+      const config =
+        codec === "avc1"
+          ? boxOf("avcC", AVCC)
+          : boxOf("av1C", Uint8Array.of(0x81, 0x08, 0x0c, 0));
+      const file = boxOf(
+        "moov",
+        trak(
+          1,
+          90000,
+          visual(
+            codec,
+            1440,
+            1080,
+            join(config, boxOf("pasp", be([4, 4], [3, 4]))),
+          ),
+        ),
+      );
+      const track = readInit(file)[0]!;
+      expect([track.width, track.height]).toEqual([1440, 1080]);
+      expect(track.pixelAspect).toEqual({ horizontal: 4, vertical: 3 });
+    }
+  });
+  test("paspがない・短い・ゼロの場合は表示比率を捏造しない", () => {
+    for (const inner of [
+      boxOf("avcC", AVCC),
+      join(boxOf("avcC", AVCC), boxOf("pasp", be([4, 4]))),
+      join(boxOf("avcC", AVCC), boxOf("pasp", be([4, 4], [0, 4]))),
+    ]) {
+      const track = readInit(
+        boxOf("moov", trak(1, 90000, visual("avc1", 1440, 1080, inner))),
+      )[0]!;
+      expect(track.pixelAspect).toBeUndefined();
+    }
+  });
+});
