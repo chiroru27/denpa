@@ -8,6 +8,7 @@ import {
   goto,
   pickCodec,
   syncEpg,
+  takeClip,
   test,
   wakeControls,
 } from "./helpers";
@@ -254,8 +255,9 @@ test.describe("ライブを MPEG-2 のまま見る", () => {
    * worker に1枚貰う (`raw/engine.ts` の `grab`)。描いたものは残さない作り
    * (`preserveDrawingBuffer` 無し) なので、**描き直さずに読むと真っ黒**になる — 黒くないことまで見る
    */
-  test("MPEG-2 のまま見ている間も切り抜きは映像ごと PNG に落ちる", async ({
+  test("MPEG-2 のまま見ている間も切り抜きは映像ごとサーバに届く", async ({
     page,
+    request,
   }) => {
     await goto(page, "/live");
     await page.getByTestId("live-channel").first().click();
@@ -270,16 +272,15 @@ test.describe("ライブを MPEG-2 のまま見る", () => {
       .toBeGreaterThan(10);
 
     await wakeControls(page, "live-frame");
-    const download = page.waitForEvent("download");
-    await page.getByTestId("live-shot").click();
-    const file = await download;
-    expect(file.suggestedFilename()).toMatch(/^.+_\d{8}-\d{6}\.png$/);
-
-    const png = readFileSync(await file.path()).toString("base64");
+    // 送った1枚を見る。偽 ffmpeg は受けたものをそのまま置くので、置いた画像が送った WebP
+    const clip = await takeClip(page, "live-shot");
+    const image = (
+      await (await request.get(`/api/clips/${clip.id}/image`)).body()
+    ).toString("base64");
     const lit = await page.evaluate(async (data) => {
       // data: を fetch すると CSP (connect-src 'self') に止められるので、手でデコードする
       const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
-      const blob = new Blob([bytes], { type: "image/png" });
+      const blob = new Blob([bytes]);
       const bitmap = await createImageBitmap(blob);
       const board = new OffscreenCanvas(bitmap.width, bitmap.height);
       const ctx = board.getContext("2d") as OffscreenCanvasRenderingContext2D;
@@ -290,7 +291,7 @@ test.describe("ライブを MPEG-2 のまま見る", () => {
         if (pixels[i]! + pixels[i + 1]! + pixels[i + 2]! > 60) bright++;
       }
       return { width: bitmap.width, bright };
-    }, png);
+    }, image);
     expect(lit.width).toBeGreaterThan(0);
     expect(lit.bright).toBeGreaterThan(0);
   });
