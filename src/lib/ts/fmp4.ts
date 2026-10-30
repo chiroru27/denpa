@@ -116,6 +116,11 @@ export interface Fmp4Track {
   config: Uint8Array<ArrayBuffer>;
   width: number;
   height: number;
+  /**
+   * 見せる幅 (画素の縦横比 `pasp` を掛けたもの。1440x1080 の SAR 4:3 なら 1920)。
+   * pasp が無い・壊れているなら付けない (デコーダが出す大きさのまま描く)
+   */
+  displayWidth?: number;
   /** 音声のチャンネル数と標本化周波数 (sample entry に書いてある値) */
   channels: number;
   sampleRate: number;
@@ -225,6 +230,22 @@ export function readInit(data: Uint8Array): Fmp4Track[] {
   return tracks;
 }
 
+/**
+ * pasp (`hSpacing` `vSpacing`。画素の横と縦の比) を幅に掛ける。
+ *
+ * 放送の 1440x1080 は ffmpeg が SAR 4:3 をそのまま写すので、出てくる fMP4 も pasp 4:3 を持つ。
+ * **AV1 は映像の中に画素の縦横比を書く場所が無く**、この pasp しか手がかりが無い (H.264 は SPS の VUI にもある)。
+ * 0 や、sample entry の幅と同じ 16 ビットに収まらない幅になるものは壊れているとみなす
+ */
+function paspWidth(pasp: Uint8Array | null, width: number): number | null {
+  if (pasp === null || pasp.length < 8) return null;
+  const horizontal = view(pasp).getUint32(0);
+  const vertical = view(pasp).getUint32(4);
+  if (horizontal === 0 || vertical === 0) return null;
+  const displayWidth = Math.round((width * horizontal) / vertical);
+  return displayWidth >= 1 && displayWidth <= 0xffff ? displayWidth : null;
+}
+
 function readEntry(
   entry: Box,
   id: number,
@@ -246,7 +267,13 @@ function readEntry(
     // VisualSampleEntry: 中身の頭から 78 バイトが決まった並び (幅は 24、高さは 26)
     if (body.length < 78) return null;
     const inner = body.subarray(78);
-    const size = { width: v.getUint16(24), height: v.getUint16(26) };
+    const width = v.getUint16(24);
+    const displayWidth = paspWidth(child(inner, "pasp"), width);
+    const size = {
+      width,
+      height: v.getUint16(26),
+      ...(displayWidth === null ? {} : { displayWidth }),
+    };
     if (entry.type === "avc1") {
       const avcC = child(inner, "avcC");
       if (avcC === null || avcC.length < 4) return null;

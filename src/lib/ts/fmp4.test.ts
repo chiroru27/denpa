@@ -445,3 +445,60 @@ describe("ffmpeg が書いた fMP4 を読む", () => {
     });
   }
 });
+
+/*
+ * **pasp (画素の縦横比) を掛けた見せる幅。** 放送の 1440x1080 は SAR 4:3 のまま fMP4 になる。
+ * 描く側 (`raw/fmp4.ts` の `draw`) はこの幅で描き、フレームが返す大きさを当てにしない
+ */
+describe("pasp から見せる幅を出す", () => {
+  const AV1C = Uint8Array.of(0x81, 0x08, 0x0c, 0);
+  const read = (type: "avc1" | "av01", width: number, pasp: Uint8Array) =>
+    readInit(
+      boxOf(
+        "moov",
+        trak(
+          1,
+          90000,
+          visual(
+            type,
+            width,
+            1080,
+            join(
+              type === "avc1" ? boxOf("avcC", AVCC) : boxOf("av1C", AV1C),
+              pasp,
+            ),
+          ),
+        ),
+      ),
+    )[0]!;
+  const pasp = (h: number, v: number) => boxOf("pasp", be([h, 4], [v, 4]));
+
+  for (const [name, type, width, box, shown] of [
+    ["H.264 の SAR 4:3 は 1920", "avc1", 1440, pasp(4, 3), 1920],
+    ["AV1 も同じく pasp で 1920", "av01", 1440, pasp(4, 3), 1920],
+    ["正方画素はそのまま", "avc1", 1920, pasp(1, 1), 1920],
+    ["横に細い画素 (SD の 8:9) は縮める", "avc1", 720, pasp(8, 9), 640],
+    ["pasp が無ければ付けない", "avc1", 1440, new Uint8Array(0), undefined],
+    [
+      "短い pasp は読まない",
+      "avc1",
+      1440,
+      boxOf("pasp", be([4, 4])),
+      undefined,
+    ],
+    ["0 の入った pasp は使わない", "avc1", 1440, pasp(4, 0), undefined],
+    [
+      "16 ビットに収まらない幅は壊れている",
+      "avc1",
+      1440,
+      pasp(0xffffffff, 1),
+      undefined,
+    ],
+  ] as const) {
+    test(name, () => {
+      const track = read(type, width, box);
+      expect(track.width).toBe(width);
+      expect(track.displayWidth).toBe(shown);
+    });
+  }
+});
