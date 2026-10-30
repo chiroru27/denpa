@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-import { Fmp4Splitter } from "#lib/ts/fmp4.js";
+import { Fmp4Splitter, type Fmp4Track } from "#lib/ts/fmp4.js";
 
 import { type Fmp4Host, Fmp4Video } from "./fmp4";
 
@@ -13,9 +13,15 @@ import { type Fmp4Host, Fmp4Video } from "./fmp4";
  * 流すのは E2E と同じ作り置き (本物の ffmpeg が書いた AV1 + Opus。`tests/fake/fmp4-loop.ts`)
  */
 
+/** いちばん新しく作ったデコーダの出口。描く大きさを見るテストで、フレームを手で出す */
+let output: VideoFrameOutputCallback | null = null;
+
 class FakeDecoder {
   state = "unconfigured";
   decodeQueueSize = 0;
+  constructor(init: VideoDecoderInit) {
+    output = init.output;
+  }
   configure(): void {
     this.state = "configured";
   }
@@ -96,4 +102,75 @@ describe("Fmp4Video (追っかけで抱えきれないとき)", () => {
     feedRounds(video, 50);
     expect(seen.full).toBe(0);
   });
+});
+
+/*
+ * **描く大きさは pasp を掛けた幅** (`Fmp4Track.displayWidth`)。Safari のフレームは画素の数 (1440) を、
+ * Chrome は H.264 の SAR を掛けた幅 (1920) を返す。どちらでも同じ大きさで描き、二重に掛けない
+ */
+describe("Fmp4Video (描く大きさ)", () => {
+  const track = (displayWidth?: number): Fmp4Track => ({
+    id: 1,
+    kind: "video",
+    timescale: 90000,
+    codec: "avc1.640029",
+    config: new Uint8Array(),
+    width: 1440,
+    height: 1080,
+    ...(displayWidth === undefined ? {} : { displayWidth }),
+    channels: 0,
+    sampleRate: 0,
+    defaults: { duration: 1500, size: 0, flags: 0 },
+  });
+
+  for (const [name, shown, returned, size] of [
+    [
+      "pasp があればフレームが画素の数を返しても 1920",
+      1920,
+      1440,
+      [1920, 1080],
+    ],
+    [
+      "pasp があればフレームが SAR を掛けて返しても 1920",
+      1920,
+      1920,
+      [1920, 1080],
+    ],
+    ["pasp が無ければフレームに合わせる", undefined, 1440, [1440, 1080]],
+  ] as const) {
+    test(name, () => {
+      const drawn: number[][] = [];
+      const canvas = {
+        width: 0,
+        height: 0,
+        getContext: () => ({
+          drawImage: (_: unknown, ...at: number[]) => drawn.push(at),
+        }),
+      };
+      const host: Fmp4Host = {
+        audio: { open: () => true, push: () => {} },
+        drew: () => {},
+        fail: (reason) => {
+          throw new Error(reason);
+        },
+        record: () => {},
+        full: () => {},
+      };
+      const video = new Fmp4Video(canvas as unknown as OffscreenCanvas, host);
+      video.configure([track(shown)]);
+      let closed = false;
+      output!({
+        displayWidth: returned,
+        displayHeight: 1080,
+        timestamp: 0,
+        close: () => {
+          closed = true;
+        },
+      } as unknown as VideoFrame);
+      video.tick(null);
+      expect([canvas.width, canvas.height]).toEqual([...size]);
+      expect(drawn).toEqual([[0, 0, ...size]]);
+      expect(closed).toBe(true);
+    });
+  }
 });

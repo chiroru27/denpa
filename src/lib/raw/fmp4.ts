@@ -37,7 +37,6 @@ import {
 
 import { downscale } from "./downscale";
 import type { GrabSize } from "./messages";
-import { mp4DisplaySize } from "./video-display";
 
 /** 番のこれだけ前からデコードする (90kHz) */
 const AHEAD = 0.3 * CLOCK;
@@ -217,14 +216,7 @@ export class Fmp4Video {
     }
     this.video = video;
     if (video === null) return;
-    const display = mp4DisplaySize(video);
     this.config = {
-      ...(display === null
-        ? {}
-        : {
-            displayAspectWidth: display.width,
-            displayAspectHeight: display.height,
-          }),
       codec: video.codec,
       description: video.config,
       codedWidth: video.width,
@@ -436,11 +428,19 @@ export class Fmp4Video {
       this.draw(this.frames.shift() as VideoFrame);
   }
 
-  /** MP4の表示比率がある場合は明示的に反映する。Safariが返す寸法に依存しない。 */
+  /**
+   * 1コマ描いて閉じる。**大きさは pasp を掛けた幅** (`Fmp4Track.displayWidth`)。無ければフレームに合わせる。
+   *
+   * **フレームの見せる大きさ (`displayWidth`) は当てにしない。** Safari の VideoDecoder は画素の数を
+   * そのまま返し、H.264 の SAR も、VideoDecoderConfig の `displayAspectWidth` も見ない (WebKit の
+   * `WebCodecsVideoDecoder.cpp`)。1440x1080 の放送が 4:3 に縮んで出る。AV1 は映像の中に SAR が無いので、
+   * どのブラウザでも pasp を読まないと分からない。MPEG-2 の経路も、見せる幅はこちらで出している (worker.ts)
+   */
   private draw(frame: VideoFrame): void {
-    const display = mp4DisplaySize(this.video);
-    const width = display?.width ?? frame.displayWidth;
-    const height = display?.height ?? frame.displayHeight;
+    const video = this.video;
+    const width = video?.displayWidth ?? frame.displayWidth;
+    const height =
+      video?.displayWidth === undefined ? frame.displayHeight : video.height;
     if (this.canvas.width !== width || this.canvas.height !== height) {
       this.canvas.width = width;
       this.canvas.height = height;
