@@ -86,7 +86,7 @@
   import { livePlayer } from "#lib/live-player.svelte.js";
   import { liveUpdates } from "#lib/live-updates.svelte.js";
   import type { HybridcastLink } from "#lib/live.js";
-  import { nativeAudioEnabled } from "#lib/native-audio-choice.js";
+  import { separateLiveAudio } from "#lib/native-audio-choice.js";
   import { reload } from "#lib/reload.svelte.js";
   import { FLOOR, stepSpeed } from "#lib/ts/pacing.js";
   import { CHANNEL_TYPES } from "#lib/types.js";
@@ -126,7 +126,7 @@
   const drive = driveGate();
   const player = livePlayer({
     confirm: drive.confirm,
-    separateAudio: nativeAudioEnabled,
+    separateAudio: separateLiveAudio,
   });
   /** 映像と重ねもの (MediaStack が組む)。bind で受けるので開くまでは null */
   let video = $state<HTMLVideoElement | null>(null);
@@ -455,7 +455,7 @@
 
   /** 音量 (`volume.svelte.ts`)。canvas はエンジンの中で、`<video>` は Web Audio に通して掛ける */
   const volume = playerVolume({
-    separateAudio: nativeAudioEnabled,
+    separateAudio: separateLiveAudio,
     video: () => (player.canvas ? null : video),
     through: () => background.on || pip.active,
     remote: (paused) => {

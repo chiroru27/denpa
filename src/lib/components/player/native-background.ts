@@ -34,7 +34,7 @@ interface Options {
   enabled: () => boolean;
   /** ページのボタンで止めているか */
   userPaused: () => boolean;
-  /** Logical audio state when sound is played separately from the video. */
+  /** 音が出ているか。音を別に鳴らしているときは `<video>` が消音でも鳴っている (無ければ `video.muted` で見る) */
   audible?: () => boolean;
   pause: () => void;
   resume: () => void;

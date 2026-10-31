@@ -175,7 +175,7 @@ test("pagehide のあとと、止めたあとは戻さない。止めると Medi
   expect(f.handlers.get("play")).toBeNull();
 });
 
-test("a separate audible track allows recovery even when the video itself is muted", () => {
+test("音を別に鳴らしていれば、<video> が消音でも戻す", () => {
   const f = fixture(true, false);
   f.video.muted = true;
   f.visibility.set("hidden");
@@ -184,7 +184,7 @@ test("a separate audible track allows recovery even when the video itself is mut
   f.stop();
 });
 
-test("a separately muted track and an explicit remote pause are not resumed", () => {
+test("別に鳴らす音を消音にしている・外から止められたときは戻さない", () => {
   const muted = fixture(true, true);
   muted.video.muted = true;
   muted.visibility.set("hidden");

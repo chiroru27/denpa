@@ -1,9 +1,16 @@
-/** Explicit, per-browser preference. No user-agent or URL based activation. */
-import { read, write } from "#lib/keep.js";
-export const NATIVE_AUDIO_KEY = "native-audio-compat";
-export function nativeAudioEnabled(): boolean {
-  return read(NATIVE_AUDIO_KEY) === "1";
+/**
+ * **ライブの音を `<video>` と別に鳴らすか** (`raw/native-audio.ts`)。WebKit (Safari、iPhone のどのブラウザも) だけ。
+ *
+ * WebKit は MSE / ManagedMediaSource で流している `<video>` の音を Web Audio に通すと無音しか渡さない
+ * ([WebKit #266922](https://bugs.webkit.org/show_bug.cgi?id=266922)) ので、音量のつまみ (`volume.svelte.ts`) が効かない。
+ * **設定には出さず UA で決める** — 起きるかはブラウザで決まり、使う人が選ぶことではない。
+ * Chromium (テスラ・Android も) は UA に `Chrome/` などの印がある。Firefox は `AppleWebKit/` を名乗らない
+ */
+export function isWebKit(ua: string): boolean {
+  return /AppleWebKit\//.test(ua) && !/\b(Chrome|Chromium|Edg|OPR)\//.test(ua);
 }
-export function chooseNativeAudio(enabled: boolean): void {
-  write(NATIVE_AUDIO_KEY, enabled ? "1" : "0");
+
+/** この端末でライブの音を別に鳴らすか */
+export function separateLiveAudio(): boolean {
+  return typeof navigator !== "undefined" && isWebKit(navigator.userAgent);
 }

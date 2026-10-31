@@ -38,7 +38,7 @@ const NOTE_FOR = 1_500;
 interface Options {
   /** `<video>` で観ているときの要素。canvas に描いているとき・まだ無いときは null */
   video: () => HTMLVideoElement | null;
-  /** 音声を別の経路で調整する画面では <video> を Web Audio へ接続しない。 */
+  /** 音を別に鳴らすか (ライブの WebKit。`#lib/native-audio-choice.ts`)。そのときは `<video>` を Web Audio に通さない */
   separateAudio?: () => boolean;
   /** `<audio>` を通すか (バックグラウンド再生をオンにしているか、押して小窓を開いている間) */
   through: () => boolean;
@@ -121,11 +121,16 @@ export function playerVolume(options: Options): Volume {
       outlet?.hold(true);
       return;
     }
-    // 音声はライブの互換処理が持つ。<video> にも接続して二重に処理しない。
+    /*
+     * 音は別に鳴らす (`raw/native-audio.ts`)。`<video>` は通さない — WebKit では通しても無音しか来ない。
+     * 別に鳴らせず `<video>` の音に戻ったとき (`live-player.svelte.ts`) のために、下げるぶんは `video.volume` でも掛ける
+     * (macOS の Safari は効く。iOS は `video.volume` を変えられない)
+     */
     if (options.separateAudio?.()) {
       if (tapped !== null) sources.get(tapped)?.disconnect();
       tapped = null;
       outlet?.hold(true);
+      video.volume = Math.min(1, volumeGain(level));
       return;
     }
     const made = open();

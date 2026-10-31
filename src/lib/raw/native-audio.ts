@@ -1,7 +1,10 @@
 /**
  * ライブの映像は <video> のまま、音声だけ既存の WASM デコーダーと Web Audio で再生する。
- * Safari の MSE → MediaElementAudioSource が音声を渡さない問題を避けるための任意設定。
+ * WebKit の MSE → MediaElementAudioSource が音声を渡さない問題を避ける (WebKit だけ。`native-audio-choice.ts`)。
  * 同期は映像の時計に合わせ、AudioContext 上では連続する音声の間隔を保つ。
+ *
+ * **Audio Session はこれが持つ** (作ったら `playback`、畳んだら戻す)。音は常に Web Audio で鳴るので、
+ * 言わずにおくと iOS は効果音として扱い、消音スイッチで黙り、裏へ回すと止める (`#lib/sound.ts` の `playbackSession`)
  */
 import { Outlet, playbackSession } from "#lib/sound.js";
 
@@ -15,13 +18,21 @@ import {
 import { setNativeAudioMuted } from "./native-audio-state";
 
 const TICK_MS = 20;
+/**
+ * 復号した PCM を持つ上限。**止めていても増え続けない**ための天井で、`HISTORY_SECONDS` とは別の歯止め。
+ * float の 48kHz 2ch なら約 43 秒ぶん (このときは `HISTORY_SECONDS` が先に効く)、5.1ch なら約 14 秒ぶん
+ */
 const PCM_LIMIT = 16 * 1024 * 1024;
+/** 観ている位置よりこれだけ前の PCM は捨てる (秒) */
 const HISTORY_SECONDS = 30;
 const SCHEDULE_AHEAD = 0.3;
 const RESYNC_SECONDS = 0.08;
 
 interface Frame extends PcmChunk {
+  /** 予約した組 (`scheduleEpoch`)。今の組と同じなら予約済み */
   scheduled: number;
+  /** PCM のバイト数 (`pcmBytes` の出し入れ) */
+  bytes: number;
 }
 export class NativeAudio {
   private readonly context: AudioContext;
@@ -34,6 +45,8 @@ export class NativeAudio {
   private nodes = new Set<AudioBufferSourceNode>();
   private epoch = 0;
   private scheduleEpoch = 0;
+  /** 今の組でまだ予約していない最初のコマ (`frames` の添字)。刻むたびに頭から見直さない */
+  private cursor = 0;
   private inFlight = 0;
   private pcmBytes = 0;
   private gone = false;
@@ -102,6 +115,7 @@ export class NativeAudio {
     window.addEventListener("pointerdown", this.wake, true);
     window.addEventListener("keydown", this.wake, true);
     this.context.onstatechange = () => this.flush();
+    playbackSession(true);
     void this.context.resume().catch(() => undefined);
   }
   private send(message: AudioInput, transfer: Transferable[] = []): void {
@@ -120,8 +134,8 @@ export class NativeAudio {
     this.video.muted = true;
     if (!muted) this.wake();
   }
+  /** `<audio>` を通すか (バックグラウンド再生・小窓)。Audio Session は作ったときから `playback` */
   setBackground(on: boolean): void {
-    playbackSession(on);
     this.outlet.want(on);
   }
   feed(bytes: Uint8Array, init: boolean): void {
@@ -130,6 +144,7 @@ export class NativeAudio {
       this.epoch++;
       this.flush();
       this.frames = [];
+      this.cursor = 0;
       this.pcmBytes = 0;
     }
     if (this.inFlight + bytes.byteLength > MAX_PENDING_BYTES) {
@@ -153,10 +168,14 @@ export class NativeAudio {
       return;
     }
     if (message.epoch !== this.epoch) return;
-    const frame = { ...message.chunk, scheduled: -1 };
+    const chunk = message.chunk;
+    const frame: Frame = {
+      ...chunk,
+      scheduled: -1,
+      bytes: chunk.planes.reduce((n, p) => n + p.byteLength, 0),
+    };
     this.frames.push(frame);
-    this.pcmBytes += frame.planes.reduce((n, p) => n + p.byteLength, 0);
-    // ~30 seconds of stereo at 48 kHz. Pausing cannot grow memory indefinitely.
+    this.pcmBytes += frame.bytes;
     while (this.pcmBytes > PCM_LIMIT && this.frames.length > 1)
       this.dropFirst();
     this.tick();
@@ -164,19 +183,21 @@ export class NativeAudio {
   private dropFirst(): void {
     const first = this.frames.shift();
     if (first === undefined) return;
-    this.pcmBytes -= first.planes.reduce((n, p) => n + p.byteLength, 0);
+    this.pcmBytes -= first.bytes;
+    this.cursor = Math.max(0, this.cursor - 1);
   }
   private flush(): void {
     for (const node of this.nodes) {
       try {
         node.stop();
       } catch {
-        /* Already ended. */
+        /* もう終わっている */
       }
       node.disconnect();
     }
     this.nodes.clear();
     this.scheduleEpoch++;
+    this.cursor = 0;
     this.last = null;
   }
   private tick(): void {
@@ -201,8 +222,8 @@ export class NativeAudio {
     ) {
       this.flush();
     }
-    // Keep one audio/video mapping. Re-reading video.currentTime for every
-    // 21ms AAC frame turns timestamp jitter into audible gaps and overlaps.
+    // 映像と音の対応は1つに保つ。21ms の AAC の1コマごとに video.currentTime を読み直すと、
+    // 時刻の揺れがそのまま音の隙間・重なりになる
     if (this.last === null) {
       this.last = { at: now, position, rate };
       this.clockLatency = Math.min(
@@ -221,8 +242,9 @@ export class NativeAudio {
     )
       this.dropFirst();
     const latency = this.clockLatency;
-    for (const frame of this.frames) {
-      // Worker は音声の PTS 順に渡す。予約する先の範囲を超えたら、残りは次の刻みに回す。
+    // Worker は音声の PTS 順に渡す。予約済みの次から見て、予約する先の範囲を超えたら残りは次の刻みに回す
+    for (; this.cursor < this.frames.length; this.cursor++) {
+      const frame = this.frames[this.cursor]!;
       if (frame.pts > audioPosition + latency + SCHEDULE_AHEAD) break;
       if (frame.scheduled === this.scheduleEpoch) continue;
       const duration = frame.planes[0]!.length / frame.sampleRate;
@@ -261,7 +283,7 @@ export class NativeAudio {
   private fail(reason: string): void {
     if (this.gone) return;
     this.destroy();
-    this.failed("音声の互換処理：" + reason);
+    this.failed(reason);
   }
   destroy(): void {
     if (this.gone) return;
@@ -279,6 +301,7 @@ export class NativeAudio {
     void this.context.close().catch(() => undefined);
     playbackSession(false);
     this.frames = [];
+    this.cursor = 0;
     this.pcmBytes = 0;
   }
 }

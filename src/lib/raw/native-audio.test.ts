@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
-import {
-  chooseNativeAudio,
-  NATIVE_AUDIO_KEY,
-  nativeAudioEnabled,
-} from "#lib/native-audio-choice.js";
-
 import { NativeAudio } from "./native-audio";
 import type { AudioInput, AudioOutput } from "./native-audio-protocol";
 import { nativeAudioMuted } from "./native-audio-state";
@@ -148,7 +142,7 @@ function setup(decoder = "/api/live/mpeg2") {
   video.dispatchEvent(new Event("playing"));
   return { video, worker, context, errors, audio };
 }
-test("uses the existing WASM endpoint and schedules PCM on the video timeline", () => {
+test("いまの WASM の置き場を使い、PCM を映像の時計の上に予約する", () => {
   const { worker, context, audio } = setup();
   expect(worker.messages.find((m) => m.type === "load")?.base).toBe(
     "/api/live/mpeg2",
@@ -158,7 +152,7 @@ test("uses the existing WASM endpoint and schedules PCM on the video timeline", 
   expect(context.sources).toHaveLength(1);
   expect(context.sources[0]!.starts[0]![0]).toBeCloseTo(50.1, 8);
 });
-test("reset cancels old audio and ignores late messages from the old channel", () => {
+test("頭から読み直したら前の音を止め、前の局から遅れて来たものは捨てる", () => {
   const { worker, context, audio } = setup();
   worker.pcm(1, 10.1);
   audio.feed(new Uint8Array([2]), true);
@@ -168,7 +162,7 @@ test("reset cancels old audio and ignores late messages from the old channel", (
   worker.pcm(2, 10.15);
   expect(context.sources).toHaveLength(2);
 });
-test("pause cancels scheduled sound, resume uses the new video position", () => {
+test("止めたら予約した音を取り消し、再開は映像の新しい位置から", () => {
   const { video, worker, context } = setup();
   worker.pcm(1, 10.1);
   video.pause();
@@ -178,14 +172,14 @@ test("pause cancels scheduled sound, resume uses the new video position", () => 
   expect(context.sources).toHaveLength(2);
   expect(context.sources[1]!.starts[0]![1]).toBeCloseTo(0.005, 8);
 });
-test("bounded compressed queue fails explicitly and cleans up", () => {
+test("デコード待ちが上限を超えたら諦めて片付ける", () => {
   const { audio, errors, worker, context } = setup();
   audio.feed(new Uint8Array(8 * 1024 * 1024), false);
   expect(errors).toHaveLength(1);
   expect(worker.terminated).toBe(true);
   expect(context.state).toBe("closed");
 });
-test("destroy prevents late frames from starting audio", () => {
+test("畳んだあとに来たコマは鳴らさない", () => {
   const { worker, context, audio } = setup();
   audio.destroy();
   worker.pcm(1, 10.1);
@@ -193,12 +187,12 @@ test("destroy prevents late frames from starting audio", () => {
   expect(worker.terminated).toBe(true);
 });
 
-test("video timestamp jitter cannot make gaps between consecutive PCM frames", () => {
+test("映像の時刻が揺れても、続く PCM の間に隙間を作らない", () => {
   const { video, worker, context } = setup();
   worker.pcm(1, 10.1);
   const firstStart = context.sources[0]!.starts[0]![0]!;
   context.currentTime = 50.01;
-  video.currentTime = 10.012; // 2ms of sampling jitter, not an actual seek.
+  video.currentTime = 10.012; // 読んだときの 2ms の揺れ (飛んだのではない)
   worker.pcm(1, 10.1 + 1024 / 48000);
   expect(context.sources[1]!.starts[0]![0]).toBeCloseTo(
     firstStart + 1024 / 48000,
@@ -206,7 +200,7 @@ test("video timestamp jitter cannot make gaps between consecutive PCM frames", (
   );
 });
 
-test("logical mute remains separate from the intentionally muted video and is released", () => {
+test("使う人の消音は、わざと消音にした <video> とは別に持ち、畳んだら外す", () => {
   const { audio, video } = setup();
   audio.setMuted(false);
   expect(video.muted).toBe(true);
@@ -217,38 +211,40 @@ test("logical mute remains separate from the intentionally muted video and is re
   expect(nativeAudioMuted(video)).toBe(undefined);
 });
 
-test("a recovered video play event also wakes the separate audio context", () => {
+test("<video> が再生に戻ったら、別に鳴らす AudioContext も起こす", () => {
   const { video, context } = setup();
   context.state = "suspended";
   video.dispatchEvent(new Event("playing"));
   expect(context.state).toBe("running");
 });
 
-test("the workaround is off by default and only the saved checkbox enables it", () => {
-  const location = { pathname: "/live", search: "?nativeAudio=1" };
-  Object.defineProperty(window, "location", {
-    value: location,
-    configurable: true,
-  });
-  const saved = new Map<string, string>();
-  set("localStorage", {
-    getItem: (key: string) => saved.get(key) ?? null,
-    setItem: (key: string, value: string) => saved.set(key, value),
-  });
-  expect(nativeAudioEnabled()).toBe(false); // Old URLs no longer enable it.
-  chooseNativeAudio(true);
-  expect(saved.get(NATIVE_AUDIO_KEY)).toBe("1");
-  expect(nativeAudioEnabled()).toBe(true);
-  location.search = "";
-  expect(nativeAudioEnabled()).toBe(true); // Ordinary live URL.
-  chooseNativeAudio(false);
-  expect(nativeAudioEnabled()).toBe(false);
-  chooseNativeAudio(true);
-  // The player receives this choice only from the live page; no URL is read here.
-  expect(Context.all).toHaveLength(0);
+test("Audio Session は作ったら playback にし、畳んだら戻す (バックグラウンド再生のオン・オフでは変えない)", () => {
+  const session = (navigator as unknown as { audioSession: { type: string } })
+    .audioSession;
+  const { audio } = setup();
+  expect(session.type).toBe("playback");
+  audio.setBackground(true);
+  audio.setBackground(false);
+  expect(session.type).toBe("playback");
+  audio.destroy();
+  expect(session.type).toBe("auto");
 });
 
-test("blocked audio is exposed to the ordinary mute/unmute controls", () => {
+test("予約済みのコマは次の刻みで見直さず、続きから予約する", () => {
+  const { worker, context } = setup();
+  for (let i = 0; i < 5; i++) worker.pcm(1, 10.1 + (i * 1024) / 48000);
+  expect(context.sources).toHaveLength(5);
+  // 刻んでも予約し直さない
+  context.currentTime = 50.02;
+  worker.pcm(1, 10.1 + (5 * 1024) / 48000);
+  expect(context.sources).toHaveLength(6);
+  expect(context.sources[5]!.starts[0]![0]).toBeCloseTo(
+    context.sources[0]!.starts[0]![0]! + (5 * 1024) / 48000,
+    8,
+  );
+});
+
+test("自動再生を断られたら、ふだんの「音を出す」に渡す", () => {
   const { audio, context } = setup();
   expect(audio.blocked).toBe(false);
   context.state = "suspended";
@@ -257,14 +253,14 @@ test("blocked audio is exposed to the ordinary mute/unmute controls", () => {
   expect(audio.blocked).toBe(false);
 });
 
-test("the player supplies the decoder endpoint, including its base path", () => {
+test("デコーダの置き場は、置いたパスの下も含めて画面が渡す", () => {
   const { worker } = setup("/tv/api/live/mpeg2");
   expect(worker.messages.find((m) => m.type === "load")?.base).toBe(
     "/tv/api/live/mpeg2",
   );
 });
 
-test("audio graph setup failure closes the partially created context", () => {
+test("音の経路を組めなかったら、作りかけの AudioContext を閉じる", () => {
   Context.failGraph = true;
   let threw = false;
   try {

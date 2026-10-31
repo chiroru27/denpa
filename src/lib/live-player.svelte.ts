@@ -226,7 +226,10 @@ interface LivePlayerOptions {
    * **まだ見せていない端末で、canvas で描く前に1回だけ呼ぶ。** 押されるまで再生を始めない
    */
   confirm?: () => Promise<void>;
-  /** ライブ画面が明示的に選んだ音声の互換処理。指定しない画面は従来のまま。 */
+  /**
+   * `<video>` で観るとき、音を別に鳴らすか (`raw/native-audio.ts`。WebKit だけ。`native-audio-choice.ts`)。
+   * ライブ画面だけが渡す。渡さない画面 (追っかけ・観る画面) は従来のまま
+   */
   separateAudio?: () => boolean;
 }
 
@@ -427,6 +430,7 @@ export function livePlayer(options: LivePlayerOptions = {}) {
   let playback = false;
   /** 音量 (%。`#lib/volume.ts`)。canvas で描くときに RawEngine へ渡す。`<video>` のぶんは画面が持つ (`volume.svelte.ts`) */
   let volume = MAX_LEVEL;
+  /** 音を別に鳴らしているとき (`separateAudio`)。`<video>` は消音にしてある */
   let nativeAudio: NativeAudio | null = null;
   /** canvas で描く経路の刻み。貯まり・貯める量の決め直しを回す (`rawPace`) */
   let rawTimer: ReturnType<typeof setInterval> | null = null;
@@ -2046,21 +2050,31 @@ export function livePlayer(options: LivePlayerOptions = {}) {
     // エンコード方式が変われば太さも変わる。数え直す
     received = 0;
     receivedFrom = 0;
+    /*
+     * **音を別に鳴らせなくなっても再生は止めない。** `<video>` の音に戻す (音量のつまみは効かないが、
+     * 前と同じに観られる)。自動で選んだ経路なので、それが転んで観られなくなるのでは困る
+     */
+    const giveUpAudio = (reason: string): void => {
+      nativeAudio?.destroy();
+      nativeAudio = null;
+      video.muted = silenced;
+      warning = `音を別に鳴らせないため、音量のつまみは効きません (${reason})`;
+    };
     if (options.separateAudio?.()) {
       try {
-        nativeAudio = new NativeAudio(
+        const separate = new NativeAudio(
           video,
-          fail,
+          (reason) => {
+            if (nativeAudio === separate) giveUpAudio(reason);
+          },
           `${resolve("").replace(/\/$/, "")}/api/live/mpeg2`,
         );
-        nativeAudio.setVolume(volume);
-        nativeAudio.setMuted(silenced);
-        nativeAudio.setBackground(playback);
-      } catch {
-        nativeAudio?.destroy();
-        nativeAudio = null;
-        fail("音声の互換処理を開始できませんでした");
-        return;
+        nativeAudio = separate;
+        separate.setVolume(volume);
+        separate.setMuted(silenced);
+        separate.setBackground(playback);
+      } catch (error) {
+        giveUpAudio(error instanceof Error ? error.message : String(error));
       }
     }
     const media = new picked.Source();

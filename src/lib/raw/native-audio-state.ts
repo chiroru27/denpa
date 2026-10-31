@@ -1,4 +1,7 @@
-/** Logical mute state for an audio companion; the video is intentionally muted. */
+/**
+ * 音を別に鳴らしているときの、使う人から見た消音 (`native-audio.ts`)。`<video>` はわざと消音にしてあるので、
+ * `video.muted` では分からない。別に鳴らしていない要素は undefined
+ */
 const states = new WeakMap<object, boolean>();
 export function nativeAudioMuted(video: object): boolean | undefined {
   return states.get(video);

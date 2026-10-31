@@ -1,3 +1,4 @@
+/** worker へ渡してまだデコードしていない fMP4 の上限 (バイト)。超えたら追いつかないものとして諦める */
 export const MAX_PENDING_BYTES = 8 * 1024 * 1024;
 
 /** ライブ音声の worker と画面の取り決め。時刻は映像と同じ秒。 */
@@ -14,7 +15,7 @@ export type AudioOutput =
   | { type: "ack"; bytes: number }
   | { type: "error"; message: string };
 
-/** Place a PCM frame on the video clock, trimming a late head rather than replaying it. */
+/** PCM の1コマを映像の時計の上に置く。間に合わなかった頭は鳴らし直さず切る。全部過ぎていれば null */
 export function audioPlan(
   pts: number,
   duration: number,
