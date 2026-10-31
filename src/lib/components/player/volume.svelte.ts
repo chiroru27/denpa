@@ -38,6 +38,8 @@ const NOTE_FOR = 1_500;
 interface Options {
   /** `<video>` で観ているときの要素。canvas に描いているとき・まだ無いときは null */
   video: () => HTMLVideoElement | null;
+  /** 音声を別の経路で調整する画面では <video> を Web Audio へ接続しない。 */
+  separateAudio?: () => boolean;
   /** `<audio>` を通すか (バックグラウンド再生をオンにしているか、押して小窓を開いている間) */
   through: () => boolean;
   /** `<audio>` を外 (ロック画面・車の操作) から止められた・再開された */
@@ -119,6 +121,13 @@ export function playerVolume(options: Options): Volume {
       outlet?.hold(true);
       return;
     }
+    // 音声はライブの互換処理が持つ。<video> にも接続して二重に処理しない。
+    if (options.separateAudio?.()) {
+      if (tapped !== null) sources.get(tapped)?.disconnect();
+      tapped = null;
+      outlet?.hold(true);
+      return;
+    }
     const made = open();
     if (made === null || outlet === null) {
       video.volume = Math.min(1, volumeGain(level));
@@ -155,6 +164,7 @@ export function playerVolume(options: Options): Volume {
     const video = options.video();
     void level;
     void options.through();
+    void options.separateAudio?.();
     untrack(() => {
       current = video;
       sync();

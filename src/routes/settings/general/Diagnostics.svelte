@@ -17,6 +17,10 @@
     stamp,
   } from "#lib/issue-report.js";
   import { held } from "#lib/live-updates.svelte.js";
+  import {
+    chooseNativeAudio,
+    nativeAudioEnabled,
+  } from "#lib/native-audio-choice.js";
   import { PHONE_FORM } from "#lib/phone-form.js";
   import { redact } from "#lib/redact.js";
 
@@ -43,8 +47,10 @@
 
   /** ブラウザ。サーバでは分からないので、開いてから入れる */
   let browser = $state("");
+  let nativeAudio = $state(false);
   onMount(() => {
     browser = navigator.userAgent;
+    nativeAudio = nativeAudioEnabled();
   });
 
   const tunerText = $derived(
@@ -297,6 +303,31 @@
           <span class="small ua" data-testid="diag-browser"
             >{browser || "—"}</span
           >
+        </div>
+        <div class="field">
+          <label class="check">
+            <input
+              type="checkbox"
+              role="switch"
+              aria-checked={nativeAudio}
+              checked={nativeAudio}
+              onchange={(event) => {
+                nativeAudio = event.currentTarget.checked;
+                chooseNativeAudio(nativeAudio);
+              }}
+              data-testid="native-audio-compat-toggle"
+            />
+            <span>音量調整の互換処理を使う</span>
+          </label>
+          <Lead>
+            WebKit（Safariなど）を使うブラウザで、WebKit側の既知の不具合により音量調整が効かない場合の回避策です。
+            次にライブを開いたときから反映します。
+            {#snippet more()}
+              <p>
+                映像の再生方式は維持し、音声だけ別の方法で再生します。端末のCPU・メモリ使用量が増えます。
+              </p>
+            {/snippet}
+          </Lead>
         </div>
       </div>
     </section>

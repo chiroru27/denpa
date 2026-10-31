@@ -86,6 +86,7 @@
   import { livePlayer } from "#lib/live-player.svelte.js";
   import { liveUpdates } from "#lib/live-updates.svelte.js";
   import type { HybridcastLink } from "#lib/live.js";
+  import { nativeAudioEnabled } from "#lib/native-audio-choice.js";
   import { reload } from "#lib/reload.svelte.js";
   import { FLOOR, stepSpeed } from "#lib/ts/pacing.js";
   import { CHANNEL_TYPES } from "#lib/types.js";
@@ -123,7 +124,10 @@
 
   /** 運転中の注意 (互換モード)。初めて canvas で再生する前に出し、押すまで再生を始めない */
   const drive = driveGate();
-  const player = livePlayer({ confirm: drive.confirm });
+  const player = livePlayer({
+    confirm: drive.confirm,
+    separateAudio: nativeAudioEnabled,
+  });
   /** 映像と重ねもの (MediaStack が組む)。bind で受けるので開くまでは null */
   let video = $state<HTMLVideoElement | null>(null);
   let still = $state<HTMLCanvasElement | null>(null);
@@ -451,6 +455,7 @@
 
   /** 音量 (`volume.svelte.ts`)。canvas はエンジンの中で、`<video>` は Web Audio に通して掛ける */
   const volume = playerVolume({
+    separateAudio: nativeAudioEnabled,
     video: () => (player.canvas ? null : video),
     through: () => background.on || pip.active,
     remote: (paused) => {

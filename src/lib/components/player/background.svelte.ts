@@ -1,6 +1,7 @@
 import { untrack } from "svelte";
 
 import { read, write } from "#lib/keep.js";
+import { nativeAudioMuted } from "#lib/raw/native-audio-state.js";
 
 import { BACKGROUND_KEY, step, storedBackground } from "./background";
 import { nativeBackgroundRecovery } from "./native-background";
@@ -107,6 +108,7 @@ export function backgroundPlayback(options: Options): Background {
         media: navigator.mediaSession,
         enabled: () => on && !options.pip() && options.nativeVideo() === video,
         userPaused: options.paused,
+        audible: () => !(nativeAudioMuted(video) ?? video.muted),
         pause: options.pause,
         resume: options.resume,
         interrupted: () =>
