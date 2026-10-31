@@ -24,7 +24,7 @@ function browser(play: string[], mse: string[]): MediaAbility {
 
 const H264_MP4 = 'video/mp4; codecs="avc1.640028,mp4a.40.2"';
 const H264_LIVE = 'video/mp4; codecs="avc1.640029,mp4a.40.2"';
-const AV1_MP4 = 'video/mp4; codecs="av01.0.08M.08,opus"';
+const AV1_MP4 = 'video/mp4; codecs="av01.0.08M.08,Opus"';
 
 /** H.264 だけエンコードした録画 (サーバの `playbackPlan` が返す形式) */
 const h264Only: PlaybackInfo = {
@@ -39,7 +39,7 @@ const h264Only: PlaybackInfo = {
       codecs: "avc1.640028,opus",
     },
     { codec: "h264", way: "stream", codecs: "avc1.640028,mp4a.40.2" },
-    { codec: "av1", way: "stream", codecs: "av01.0.08M.08,opus" },
+    { codec: "av1", way: "stream", codecs: "av01.0.08M.08,Opus" },
   ],
 };
 
@@ -54,7 +54,7 @@ const av1Only: PlaybackInfo = {
       codecs: "av01.0.08M.08,opus",
     },
     { codec: "h264", way: "stream", codecs: "avc1.640029,mp4a.40.2" },
-    { codec: "av1", way: "stream", codecs: "av01.0.08M.08,opus" },
+    { codec: "av1", way: "stream", codecs: "av01.0.08M.08,Opus" },
   ],
 };
 
@@ -65,7 +65,7 @@ const tsOnly: PlaybackInfo = {
   audios: [{ id: "0:both", label: "音声" }],
   offers: [
     { codec: "h264", way: "stream", codecs: "avc1.640029,mp4a.40.2" },
-    { codec: "av1", way: "stream", codecs: "av01.0.08M.08,opus" },
+    { codec: "av1", way: "stream", codecs: "av01.0.08M.08,Opus" },
     { codec: "mpeg2", way: "raw" },
   ],
 };
@@ -291,7 +291,7 @@ describe("H.265 もある録画 (AV1 → H.265 → H.264)", () => {
       },
       { codec: "h264", way: "stream", codecs: "avc1.640028,mp4a.40.2" },
       { codec: "hevc", way: "stream", codecs: "hvc1.1.6.L123.90,mp4a.40.2" },
-      { codec: "av1", way: "stream", codecs: "av01.0.08M.08,opus" },
+      { codec: "av1", way: "stream", codecs: "av01.0.08M.08,Opus" },
     ],
   };
 

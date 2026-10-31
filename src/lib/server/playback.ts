@@ -281,7 +281,7 @@ function codecOf(video: string | null): HwCodec | null {
  * 受け取れるとは限らないため
  */
 function streamAudio(codec: HwCodec): string {
-  return codec === "av1" ? "opus" : "mp4a.40.2";
+  return codec === "av1" ? "Opus" : "mp4a.40.2";
 }
 
 /** 変換したときの codecs (`live.codecsFor` の中身) */

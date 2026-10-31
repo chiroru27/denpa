@@ -491,9 +491,10 @@ export function audioArgs(codec: StreamCodec): string[] {
  *
  * **音声も組で決まる** (`audioArgs`)。AV1 は Opus、H.264 は AAC
  */
+// MP4ではsample entryの登録名 `Opus` を使う。小文字ではSafariが非対応と判定する。
 export function codecsFor(codec: LiveCodec): string {
   return codec === "av1"
-    ? 'video/mp4; codecs="av01.0.08M.08,opus"'
+    ? 'video/mp4; codecs="av01.0.08M.08,Opus"'
     : 'video/mp4; codecs="avc1.640029,mp4a.40.2"';
 }
 

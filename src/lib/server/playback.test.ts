@@ -164,7 +164,7 @@ describe("何を出せるか (playbackPlan)", () => {
           codecs: "avc1.640028,opus",
         },
         { codec: "h264", way: "stream", codecs: "avc1.640028,mp4a.40.2" },
-        { codec: "av1", way: "stream", codecs: "av01.0.08M.08,opus" },
+        { codec: "av1", way: "stream", codecs: "av01.0.08M.08,Opus" },
       ],
     });
   });
@@ -187,7 +187,7 @@ describe("何を出せるか (playbackPlan)", () => {
       },
       { codec: "h264", way: "file", source: "alt", codecs: "avc1.640028,opus" },
       { codec: "h264", way: "stream", codecs: "avc1.640028,mp4a.40.2" },
-      { codec: "av1", way: "stream", codecs: "av01.0.08M.08,opus" },
+      { codec: "av1", way: "stream", codecs: "av01.0.08M.08,Opus" },
       { codec: "mpeg2", way: "raw" },
     ]);
     expect(plan?.skip).toBe(0.5);
@@ -216,7 +216,7 @@ describe("何を出せるか (playbackPlan)", () => {
     expect(plan?.info.axis).toBe("ts");
     expect(plan?.info.offers).toEqual([
       { codec: "h264", way: "stream", codecs: "avc1.640029,mp4a.40.2" },
-      { codec: "av1", way: "stream", codecs: "av01.0.08M.08,opus" },
+      { codec: "av1", way: "stream", codecs: "av01.0.08M.08,Opus" },
       { codec: "mpeg2", way: "raw" },
     ]);
     expect(plan?.info.duration).toBeCloseTo(
@@ -265,7 +265,7 @@ describe("何を出せるか (playbackPlan)", () => {
       { codec: "h264", way: "file", source: "alt", codecs: "avc1.640028,opus" },
       { codec: "hevc", way: "stream", codecs: "hvc1.1.6.L123.90,mp4a.40.2" },
       { codec: "h264", way: "stream", codecs: "avc1.640028,mp4a.40.2" },
-      { codec: "av1", way: "stream", codecs: "av01.0.08M.08,opus" },
+      { codec: "av1", way: "stream", codecs: "av01.0.08M.08,Opus" },
     ]);
     // H.265 のエンコード済みが無ければ H.265 は出さない (その場の変換では作らない)
     const none = await playbackPlan(seed({ library_path: av1 }));
