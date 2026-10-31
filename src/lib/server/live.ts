@@ -465,7 +465,7 @@ function softwareArgs(codec: LiveCodec): string[] {
  *
  * 設計 (stream.md#前提) が狙っていた組み合わせで、**録画と同じ扱い**でもある
  * (`encoder.ts` は前から `libopus -b:a 256k`)。同じ音質なら AAC より小さく、
- * ブラウザは MSE で受け取れる (Chromium で `av01…,opus` を確かめ済み)。
+ * ブラウザは MSE で受け取れる (Chromium で `av01…,Opus` を確かめ済み。codecs の書き方は `codecsFor`)。
  *
  * **256k は放送に合わせた値。** 元の放送が AAC 256kbps なので、録画側は
  * そこへ揃えてある。ライブだけ 192k で低かったのを、こちらへ寄せる。
@@ -490,12 +490,14 @@ export function audioArgs(codec: StreamCodec): string[] {
  *
  * - `avc1.640029` … High profile / Level 4.1。1080p60 まで
  * - `av01.0.08M.08` … Main profile / Level 4.0 / 8bit。同じく 1080p60 まで
+ * - `Opus` … MP4 での Opus の名前 (中の箱の名前と同じく大文字の O)。Safari は小文字の `opus` を断る
+ *   (Chromium は両方受け取る)。入れ物が WebM なら小文字が正しいので、エンコード済みのファイルは `opus` のまま
  *
  * **音声も組で決まる** (`audioArgs`)。AV1 は Opus、H.264 は AAC
  */
 export function codecsFor(codec: LiveCodec): string {
   return codec === "av1"
-    ? 'video/mp4; codecs="av01.0.08M.08,opus"'
+    ? 'video/mp4; codecs="av01.0.08M.08,Opus"'
     : 'video/mp4; codecs="avc1.640029,mp4a.40.2"';
 }
 

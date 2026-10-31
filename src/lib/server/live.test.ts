@@ -316,7 +316,7 @@ describe("音声も組で決まる", () => {
   test("AV1 は Opus 256k", () => {
     expect(args("av1")).toContain("libopus");
     expect(rate(args("av1"))).toBe("256k");
-    expect(codecsFor("av1")).toContain("opus");
+    expect(codecsFor("av1")).toBe('video/mp4; codecs="av01.0.08M.08,Opus"');
   });
 
   test("H.264 は AAC のまま", () => {

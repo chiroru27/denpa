@@ -264,7 +264,7 @@
       "codecs": "av01.0.08M.08,opus"
     },
     { "codec": "h264", "way": "stream", "codecs": "avc1.640029,mp4a.40.2" },
-    { "codec": "av1", "way": "stream", "codecs": "av01.0.08M.08,opus" },
+    { "codec": "av1", "way": "stream", "codecs": "av01.0.08M.08,Opus" },
     { "codec": "mpeg2", "way": "raw" }
   ]
 }
@@ -274,7 +274,7 @@
   (エンコード済みが無い録画)。`duration`・下の `from`・ストリームの時刻・字幕 (`captions.json`)・チャプターはどれもこれで数えます
 - `offers` の `way`:
   - `file` … エンコード済みのファイルそのまま (`api/recordings/<id>/file?source=<source>`。`source` は `encoded` / `hevc` / `alt`)。`codecs` は入れ物の中身 (読めなければ無い。H.265 は `hvc1.…`)
-  - `stream` … `stream?codec=<codec>` で fragmented MP4。`codecs` は MP4 の中身。エンコード済みと同じコーデックなら詰め替えるだけ
+  - `stream` … `stream?codec=<codec>` で fragmented MP4。`codecs` は MP4 の中身。MP4 の Opus は大文字の `Opus` (MP4 の中の名前。Safari は小文字の `opus` を受け取らない)。`file` は Matroska・WebM なので小文字の `opus`。エンコード済みと同じコーデックなら詰め替えるだけ
     (軽い)、違えばエンコード済み (無ければ元の TS) から変換します。
     **`hevc` の `stream` は詰め替えだけ**で、H.265 のエンコード済みがある録画にだけ出します (その場の変換では H.265 を作らない。`hvc1` と名乗り、音声は AAC)
   - `raw` … `stream?codec=mpeg2` で元の TS をそのまま。元の TS が残っていて、CM を切らずにエンコードした録画 (か、エンコード済みが無い録画) だけ。エンコードで捨てた頭の長さを覚えていない古い録画には出さない
