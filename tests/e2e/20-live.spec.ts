@@ -2209,12 +2209,20 @@ test.describe("ライブ視聴", () => {
   test("字幕は映像と同じ ffmpeg で、同じ物差しで取り出す", async ({
     page,
     stack,
+    request,
   }) => {
-    await goto(page, "/live");
-    await page.getByTestId("live-channel").first().click();
-    await expect(page.getByTestId("live-title")).toBeVisible();
-
-    const args = await ffmpegArgs(stack.liveArgsFile, expect);
+    // 偽の放送の PMT に字幕の ES を載せる。無ければ字幕の出口は頼まない (下の「字幕を持たない放送」)
+    await request.post(`${stack.agentUrl}/__control/captions?on=1`);
+    let args: string[];
+    try {
+      await goto(page, "/live");
+      await page.getByTestId("live-channel").first().click();
+      await expect(page.getByTestId("live-title")).toBeVisible();
+      args = await ffmpegArgs(stack.liveArgsFile, expect);
+    } finally {
+      // 載せたままだと、同じ偽の放送を使うデータ放送の E2E を乱す (`Knobs.captions`)
+      await request.post(`${stack.agentUrl}/__control/captions?on=0`);
+    }
     // 映像と字幕が同じ1回の中にあること
     expect(args).toContain("libx264");
     expect(args).toContain("pipe:1");
@@ -2237,6 +2245,42 @@ test.describe("ライブ視聴", () => {
      * 戻らず、字幕が1秒ほど遅れて出て、消えるのも遅れる
      */
     expect(args).not.toContain("showinfo");
+  });
+
+  /*
+   * **字幕を持たない放送では、初めから字幕の出口を頼まない。**
+   *
+   * 頼むと ffmpeg は入口を探り終えてから降り、字幕なしで起こし直すまで映像が 1.5秒ほど遅れていた
+   * (実機の CS で、開くたびに)。PMT には ES が全部並んでいるので、起こす前に読めば分かる
+   * (`server/captions.ts` の `peekCaptions`)。偽 ffmpeg は本物と同じく、頼まれたら降りる
+   */
+  test("字幕を持たない放送では、ffmpeg を起こし直さずに開く", async ({
+    page,
+    stack,
+    request,
+  }) => {
+    rmSync(stack.liveArgsFile, { force: true });
+    // 偽の放送の PMT は、既定で字幕の ES を載せない (`Knobs.captions`)
+    await request.post(`${stack.agentUrl}/__control/captions?on=0`);
+    writeFileSync(stack.liveNoCaptionsFile, "1");
+    try {
+      await goto(page, "/live");
+      await page.getByTestId("live-channel").first().click();
+      await expect(page.getByTestId("live-title")).toBeVisible();
+
+      const args = await ffmpegArgs(stack.liveArgsFile, expect);
+      expect(args).not.toContain("pipe:3");
+      expect(args.some((arg) => /:s:\d+$/.test(arg))).toBe(false);
+
+      // 起こし直していれば、降りてすぐ2回目が足される。少し待っても1回のまま
+      await page.waitForTimeout(2_000);
+      const runs = readFileSync(stack.liveArgsFile, "utf8")
+        .split("---\n")
+        .filter((run) => run.includes("libx264"));
+      expect(runs).toHaveLength(1);
+    } finally {
+      rmSync(stack.liveNoCaptionsFile, { force: true });
+    }
   });
 
   /*
