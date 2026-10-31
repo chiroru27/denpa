@@ -6,8 +6,10 @@
  * コメントの出どころ (NX-Jikkyo・過去ログ API) と控えはここが持つ。どこから埋めるかは docs/watch.md の「実況」
  */
 import { type PostStyle, postStyle } from "./command";
+import type { Comment } from "./comments";
 import { Cursor, type Take } from "./cursor";
 import { fetchKakolog, KAKOLOG_LAG } from "./kakolog";
+import { FORCE_SPAN, LIST_SPAN } from "./list";
 import { compileNg } from "./ng";
 import { NxJikkyo } from "./nx";
 import type { PostResult } from "./post";
@@ -33,6 +35,8 @@ export class JikkyoFeed {
 
   /** NG ワードを含むか (世帯の設定)。控えには残し、出すときに外す (語を変えたらすぐ効く。取り直さない) */
   private ng: (text: string) => boolean = () => false;
+  /** 1 件ずつの NG の判定の控え。一覧は 0.25 秒ごとに同じものを読み直すので、そのたびに字をそろえ直さない */
+  private ngSeen = new WeakMap<Comment, boolean>();
   private readonly cursor = new Cursor();
   private nx: NxJikkyo | null = null;
   private channel: string | null = null;
@@ -163,6 +167,7 @@ export class JikkyoFeed {
   /** NG ワードを替えた。次に出すものから効く */
   setNg(words: readonly string[]): void {
     this.ng = compileNg(words);
+    this.ngSeen = new WeakMap();
   }
 
   /**
@@ -172,8 +177,37 @@ export class JikkyoFeed {
   take(w: number): Take {
     if (!this.active) return { comments: [], jumped: false };
     const take = this.cursor.take(w);
-    const comments = take.comments.filter((c) => !this.ng(c.text));
+    const comments = take.comments.filter((c) => !this.isNg(c));
     return { comments, jumped: take.jumped };
+  }
+
+  /**
+   * コメントの一覧に並べるもの。いまの放送時刻 `w` までの `LIST_SPAN` に書かれたもののうち、新しいほうから `limit` 件
+   * (時刻の順)。`take` と違って何も消費しないので、何度読んでもよい。NG ワードを含むものは外す
+   */
+  recent(w: number, limit: number): Comment[] {
+    if (!this.active) return [];
+    return this.cursor.store.latest(
+      w - LIST_SPAN,
+      w,
+      limit,
+      (c) => !this.isNg(c),
+    );
+  }
+
+  private isNg(comment: Comment): boolean {
+    let hit = this.ngSeen.get(comment);
+    if (hit === undefined) {
+      hit = this.ng(comment.text);
+      this.ngSeen.set(comment, hit);
+    }
+    return hit;
+  }
+
+  /** 勢い。いまの放送時刻 `w` までの 1 分に書かれたものの数 (NG ワードのものも数える) */
+  force(w: number): number {
+    if (!this.active) return 0;
+    return this.cursor.store.count(w - FORCE_SPAN, w);
   }
 
   /** 画面を閉じた。繋いでいるものを閉じる */
