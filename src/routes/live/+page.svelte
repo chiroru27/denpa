@@ -418,6 +418,7 @@
     nativeVideo: () => (player.canvas ? null : video),
     pip: () => pip.active,
     paused: () => player.paused,
+    muted: () => player.silenced,
     pause: () => {
       wasLive = player.live;
       player.toggle();

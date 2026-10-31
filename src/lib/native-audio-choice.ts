@@ -7,7 +7,8 @@
  * Chromium (テスラ・Android も) は UA に `Chrome/` などの印がある。Firefox は `AppleWebKit/` を名乗らない
  */
 export function isWebKit(ua: string): boolean {
-  return /AppleWebKit\//.test(ua) && !/\b(Chrome|Chromium|Edg|OPR)\//.test(ua);
+  // `\b` は付けない (ヘッドレスの Chromium は `HeadlessChrome/`)
+  return /AppleWebKit\//.test(ua) && !/(Chrome|Chromium|Edg|OPR)\//.test(ua);
 }
 
 /** この端末でライブの音を別に鳴らすか */

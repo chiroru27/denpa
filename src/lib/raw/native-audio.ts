@@ -15,7 +15,6 @@ import {
   MAX_PENDING_BYTES,
   type PcmChunk,
 } from "./native-audio-protocol";
-import { setNativeAudioMuted } from "./native-audio-state";
 
 const TICK_MS = 20;
 /**
@@ -28,9 +27,13 @@ const HISTORY_SECONDS = 30;
 const SCHEDULE_AHEAD = 0.3;
 const RESYNC_SECONDS = 0.08;
 
+/** AudioContext の `at` 秒に、映像は `position` 秒を `rate` 倍で進んでいた */
+interface Clock {
+  at: number;
+  position: number;
+  rate: number;
+}
 interface Frame extends PcmChunk {
-  /** 予約した組 (`scheduleEpoch`)。今の組と同じなら予約済み */
-  scheduled: number;
   /** PCM のバイト数 (`pcmBytes` の出し入れ) */
   bytes: number;
 }
@@ -40,18 +43,19 @@ export class NativeAudio {
   private readonly outlet: Outlet;
   private readonly muteGain: GainNode;
   private readonly timer: ReturnType<typeof setInterval>;
-  private readonly bindings: [string, EventListener][] = [];
+  /** `<video>`・window に付けた受け口。畳むときにまとめて外す */
+  private readonly listening = new AbortController();
   private frames: Frame[] = [];
   private nodes = new Set<AudioBufferSourceNode>();
   private epoch = 0;
-  private scheduleEpoch = 0;
-  /** 今の組でまだ予約していない最初のコマ (`frames` の添字)。刻むたびに頭から見直さない */
+  /** まだ予約していない最初のコマ (`frames` の添字)。組み直す (`flush`) と 0 に戻る */
   private cursor = 0;
   private inFlight = 0;
   private pcmBytes = 0;
   private gone = false;
   private waiting = true;
-  private last: { at: number; position: number; rate: number } | null = null;
+  /** 映像の時計と AudioContext の時計の対応。組み直すまで同じものを使う */
+  private last: Clock | null = null;
   private clockLatency = 0;
   constructor(
     private readonly video: HTMLVideoElement,
@@ -86,15 +90,10 @@ export class NativeAudio {
       this.receive(event.data);
     this.worker.onerror = () =>
       this.fail("音声デコーダーでエラーが発生しました");
-    this.send({
-      type: "load",
-      base: decoder,
-    });
-    const bind = (event: string, fn: () => void) => {
-      const listener: EventListener = fn;
-      video.addEventListener(event, listener);
-      this.bindings.push([event, listener]);
-    };
+    this.send({ type: "load", base: decoder });
+    const signal = this.listening.signal;
+    const bind = (event: string, fn: () => void) =>
+      video.addEventListener(event, fn, { signal });
     bind("playing", () => {
       this.waiting = false;
       this.wake();
@@ -112,8 +111,8 @@ export class NativeAudio {
     });
     bind("ratechange", () => this.flush());
     this.timer = setInterval(() => this.tick(), TICK_MS);
-    window.addEventListener("pointerdown", this.wake, true);
-    window.addEventListener("keydown", this.wake, true);
+    for (const event of ["pointerdown", "keydown"])
+      window.addEventListener(event, this.wake, { capture: true, signal });
     this.context.onstatechange = () => this.flush();
     playbackSession(true);
     void this.context.resume().catch(() => undefined);
@@ -129,7 +128,6 @@ export class NativeAudio {
     this.outlet.level = level;
   }
   setMuted(muted: boolean): void {
-    setNativeAudioMuted(this.video, muted);
     this.muteGain.gain.value = muted ? 0 : 1;
     this.video.muted = true;
     if (!muted) this.wake();
@@ -171,7 +169,6 @@ export class NativeAudio {
     const chunk = message.chunk;
     const frame: Frame = {
       ...chunk,
-      scheduled: -1,
       bytes: chunk.planes.reduce((n, p) => n + p.byteLength, 0),
     };
     this.frames.push(frame);
@@ -196,7 +193,6 @@ export class NativeAudio {
       node.disconnect();
     }
     this.nodes.clear();
-    this.scheduleEpoch++;
     this.cursor = 0;
     this.last = null;
   }
@@ -214,31 +210,26 @@ export class NativeAudio {
     )
       return;
     const rate = video.playbackRate;
+    const follow = (last: Clock) => last.position + (now - last.at) * last.rate;
+    // 映像と音の対応は1つに保つ。21ms の AAC の1コマごとに video.currentTime を読み直すと、
+    // 時刻の揺れがそのまま音の隙間・重なりになる。大きくずれたときだけ組み直す
     if (
       this.last !== null &&
-      Math.abs(
-        this.last.position + (now - this.last.at) * this.last.rate - position,
-      ) > RESYNC_SECONDS
-    ) {
+      Math.abs(follow(this.last) - position) > RESYNC_SECONDS
+    )
       this.flush();
-    }
-    // 映像と音の対応は1つに保つ。21ms の AAC の1コマごとに video.currentTime を読み直すと、
-    // 時刻の揺れがそのまま音の隙間・重なりになる
     if (this.last === null) {
       this.last = { at: now, position, rate };
+      const { baseLatency, outputLatency } = this.context;
       this.clockLatency = Math.min(
         0.25,
-        Math.max(
-          0,
-          (this.context.baseLatency || 0) + (this.context.outputLatency || 0),
-        ),
+        Math.max(0, (baseLatency || 0) + (outputLatency || 0)),
       );
     }
-    const audioPosition =
-      this.last.position + (now - this.last.at) * this.last.rate;
+    const audioPosition = follow(this.last);
     while (
-      this.frames.length > 0 &&
-      this.frames[0]!.pts < position - HISTORY_SECONDS
+      this.frames[0] !== undefined &&
+      this.frames[0].pts < position - HISTORY_SECONDS
     )
       this.dropFirst();
     const latency = this.clockLatency;
@@ -246,21 +237,19 @@ export class NativeAudio {
     for (; this.cursor < this.frames.length; this.cursor++) {
       const frame = this.frames[this.cursor]!;
       if (frame.pts > audioPosition + latency + SCHEDULE_AHEAD) break;
-      if (frame.scheduled === this.scheduleEpoch) continue;
-      const duration = frame.planes[0]!.length / frame.sampleRate;
+      const length = frame.planes[0]!.length;
       const plan = audioPlan(
         frame.pts,
-        duration,
+        length / frame.sampleRate,
         audioPosition,
         rate,
         now,
         latency,
       );
-      frame.scheduled = this.scheduleEpoch;
       if (plan === null) continue;
       const buffer = this.context.createBuffer(
         frame.planes.length,
-        frame.planes[0]!.length,
+        length,
         frame.sampleRate,
       );
       frame.planes.forEach((plane, ch) => buffer.copyToChannel(plane, ch));
@@ -288,13 +277,9 @@ export class NativeAudio {
   destroy(): void {
     if (this.gone) return;
     this.gone = true;
-    setNativeAudioMuted(this.video, null);
     this.flush();
     clearInterval(this.timer);
-    for (const [event, listener] of this.bindings)
-      this.video.removeEventListener(event, listener);
-    window.removeEventListener("pointerdown", this.wake, true);
-    window.removeEventListener("keydown", this.wake, true);
+    this.listening.abort();
     this.worker.terminate();
     this.outlet.destroy();
     this.context.onstatechange = null;

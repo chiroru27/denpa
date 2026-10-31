@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { NativeAudio } from "./native-audio";
 import type { AudioInput, AudioOutput } from "./native-audio-protocol";
-import { nativeAudioMuted } from "./native-audio-state";
+
 class Node {
   gain = { value: 1 };
   threshold = { value: 0 };
@@ -142,10 +142,10 @@ function setup(decoder = "/api/live/mpeg2") {
   video.dispatchEvent(new Event("playing"));
   return { video, worker, context, errors, audio };
 }
-test("いまの WASM の置き場を使い、PCM を映像の時計の上に予約する", () => {
-  const { worker, context, audio } = setup();
+test("画面が渡した WASM の置き場 (置いたパスの下も) を使い、PCM を映像の時計の上に予約する", () => {
+  const { worker, context, audio } = setup("/tv/api/live/mpeg2");
   expect(worker.messages.find((m) => m.type === "load")?.base).toBe(
-    "/api/live/mpeg2",
+    "/tv/api/live/mpeg2",
   );
   audio.setMuted(false);
   worker.pcm(1, 10.1);
@@ -200,15 +200,10 @@ test("映像の時刻が揺れても、続く PCM の間に隙間を作らない
   );
 });
 
-test("使う人の消音は、わざと消音にした <video> とは別に持ち、畳んだら外す", () => {
+test("音を出しても <video> は消音のまま (二重に鳴らさない)", () => {
   const { audio, video } = setup();
   audio.setMuted(false);
   expect(video.muted).toBe(true);
-  expect(nativeAudioMuted(video)).toBe(false);
-  audio.setMuted(true);
-  expect(nativeAudioMuted(video)).toBe(true);
-  audio.destroy();
-  expect(nativeAudioMuted(video)).toBe(undefined);
 });
 
 test("<video> が再生に戻ったら、別に鳴らす AudioContext も起こす", () => {
@@ -251,13 +246,6 @@ test("自動再生を断られたら、ふだんの「音を出す」に渡す",
   expect(audio.blocked).toBe(true);
   audio.setMuted(false);
   expect(audio.blocked).toBe(false);
-});
-
-test("デコーダの置き場は、置いたパスの下も含めて画面が渡す", () => {
-  const { worker } = setup("/tv/api/live/mpeg2");
-  expect(worker.messages.find((m) => m.type === "load")?.base).toBe(
-    "/tv/api/live/mpeg2",
-  );
 });
 
 test("音の経路を組めなかったら、作りかけの AudioContext を閉じる", () => {
