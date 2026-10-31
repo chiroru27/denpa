@@ -33,7 +33,7 @@ GPU が2枚あればコーデックごとに割り振れ、「GPU を順番に�
 デバイスの分は変えないので、GPU を挿し替えればそのまま効きます (`hw.chooseHw`)。挿し直した・権限を直したときは
 コーデックの下の「確かめ直す」で、再起動せずに見直せます。
 
-**試す順は (デバイスごとに) QSV → VA-API、最後にソフトウェア**で、どの方式でも「素のまま → 頭を少し捨てて」の
+**試す順は (デバイスごとに) QSV → VA-API (Rockchip は MPP、NVIDIA は NVENC)、最後にソフトウェア** (H.265 を除く) で、どの方式でも「素のまま → 頭を少し捨てて」の
 2回が落ちたら次へ移ります。試しのエンコードが通っても素材しだいで落ちることはありますが、GPU が駄目なだけで
 録画は失敗しません。Linux では QSV の下に必ず VA-API があるので、速さは同じです。QSV のほうが
 レート制御が豊富で Intel が手入れしているので先に使い、VA-API は QSV が初期化できない世代の逃げ道にしています。
@@ -192,7 +192,7 @@ CPU に残る bwdif がどれだけ食うか)、要るデバイスファイル (
 ## NVIDIA でエンコードする
 
 **NVIDIA の GPU の NVENC で H.264・H.265・AV1 をエンコードできます** (amd64。`h264_nvenc` / `hevc_nvenc` / `av1_nvenc`)。AV1 は RTX 40 以降
-(Ada) だけで、それより前の GPU では試しのエンコードが落ちて H.264 だけになります。ffmpeg は nv-codec-headers (MIT) で
+(Ada) だけで、それより前の GPU では AV1 の試しのエンコードが落ちて H.264・H.265 だけになります。ffmpeg は nv-codec-headers (MIT) で
 組んであり、**ドライバのライブラリ (libcuda・libnvidia-encode) はイメージに入れていません** — ホストのものを
 NVIDIA Container Toolkit がコンテナに差し込みます (`Dockerfile` の ffmpeg 段)。
 
@@ -243,7 +243,7 @@ NVENC を1コマ試し、通れば設定の「エンコード」でエンコー�
 
 **実機で確かめていないこと** (手元に NVIDIA の GPU がありません): 上の値で見た目が今の H.264 と揃うか・AV1 の値、速さ、
 ライブで最初の映像が出るまでの時間、同時に開ける数を超えたときの言い分 (ドライバで違う。FFmpeg の nvenc.c が出す形から
-`out of memory` と `incompatible client key` を拾っている)、2枚挿しで番号が並びと合うか、distroless の実行イメージで
+`out of memory` と `incompatible client key` を見分けている)、2枚挿しで番号が並びと合うか、distroless の実行イメージで
 Container Toolkit がライブラリを差し込めるか (Toolkit は差し込んだあと ldconfig を走らせようとするが、イメージには無い。
 差し込み先の `/usr/lib/x86_64-linux-gnu` は既定の検索先なので、dlopen は通るはず)。
 
